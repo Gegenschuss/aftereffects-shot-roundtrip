@@ -32,48 +32,74 @@
 
     // ─────────────────────────────────────────────────────────────────
     // Project scan: collect every *_container CompItem and analyse its
-    // current variant state.
+    // current variant state.  Strict shot-name + structure match so
+    // stale stacks from previous rounds don't show up in the dialog.
     // ─────────────────────────────────────────────────────────────────
+    function findCompByName(name) {
+        for (var i = 1; i <= app.project.numItems; i++) {
+            var it;
+            try { it = app.project.item(i); } catch (e) { continue; }
+            if (it instanceof CompItem && it.name === name) return it;
+        }
+        return null;
+    }
+    function escapeRx(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
     function detectShotState(containerComp) {
         // Returns { containerComp, shotName, bakeActive, hasBake,
-        //          plateLyr, revLyr, bakeInner, ppLayer } or null on
-        // structural error (so the row can be shown disabled).
+        //          plateLyr, revLyr, bakeInner, ppLayer } or null when
+        // the shot doesn't have a clean wrap-path setup with a current-
+        // round bake (= precomp-path shots are filtered too because
+        // their bake-flip math requires a different chain layer than
+        // containerInner — Switch Variant doesn't handle that yet).
         if (!containerComp || !(containerComp instanceof CompItem)) return null;
         if (containerComp.numLayers < 1) return null;
-        var inner = containerComp.layer(1);
-        if (!inner || !(inner.source instanceof CompItem)) return null;
-        var shotComp = inner.source;
 
-        // Find the *_stack ppLayer in shotComp
+        // Strict by-name lookup of the matching *_comp + *_stack.
+        var nameMatch = containerComp.name.match(/^(.+)_container(_OS)?$/);
+        if (!nameMatch) return null;
+        var shotName = nameMatch[1];
+        var osSuffix = nameMatch[2] || "";
+
+        var shotComp  = findCompByName(shotName + "_comp"  + osSuffix);
+        var stackComp = findCompByName(shotName + "_stack" + osSuffix);
+        if (!shotComp || !stackComp) return null;
+
+        // containerInner must drive shotComp directly.  If
+        // containerInner.source is some intermediate precomp instead
+        // (i.e. precomp-path with chain.length > 2), the time-remap
+        // that would need flipping lives at a different chain depth
+        // than containerInner — out of scope for the simple flip we
+        // do here.
+        var inner = containerComp.layer(1);
+        if (!inner || inner.source !== shotComp) return null;
+
+        // Find ppLayer in shotComp (must point at stackComp by identity).
         var pp = null;
         for (var i = 1; i <= shotComp.numLayers; i++) {
             var l;
             try { l = shotComp.layer(i); } catch (e) { continue; }
-            if (l && l.source instanceof CompItem &&
-                /_stack(?:_OS)?$/.test(l.source.name)) {
-                pp = l;
-                break;
-            }
+            if (l && l.source === stackComp) { pp = l; break; }
         }
         if (!pp) return null;
-        var stackComp = pp.source;
 
-        // Find plate + reversed in the stack
+        // Strict {shotName}_plate.mov / {shotName}_reversed.mov match
+        // so OLD layers (e.g. shot_010_reversed.mov in a stack
+        // belonging to shot_020) don't surface here.
+        var plateRx = new RegExp("^" + escapeRx(shotName) + "_plate\\.mov$");
+        var revRx   = new RegExp("^" + escapeRx(shotName) + "_reversed\\.mov$");
         var plateLyr = null, revLyr = null;
         for (var j = 1; j <= stackComp.numLayers; j++) {
             var sl;
             try { sl = stackComp.layer(j); } catch (e) { continue; }
             if (!sl || !sl.source || !sl.source.name) continue;
-            if (!plateLyr && /_plate\.mov$/.test(sl.source.name)) plateLyr = sl;
-            if (!revLyr   && /_reversed\.mov$/.test(sl.source.name)) revLyr   = sl;
+            if (!plateLyr && plateRx.test(sl.source.name)) plateLyr = sl;
+            if (!revLyr   && revRx.test(sl.source.name))   revLyr   = sl;
         }
 
         var hasBake = !!revLyr;
         var bakeActive = false;
         if (revLyr && revLyr.enabled && (!plateLyr || !plateLyr.enabled)) bakeActive = true;
-
-        // Derive shot name from container name
-        var shotName = containerComp.name.replace(/_container(?:_OS)?$/, "");
 
         return {
             containerComp: containerComp,
@@ -96,11 +122,10 @@
             if (!(it instanceof CompItem)) continue;
             if (!/_container(?:_OS)?$/.test(it.name)) continue;
             var st = detectShotState(it);
-            // Exclude shots that don't have a _reversed.mov in their
-            // stack — there's no variant to switch to, so they don't
-            // belong in the dialog.  User runs Bake first to add the
-            // reversed variant.
-            if (st && st.hasBake) out.push(st);
+            // List every wrap-path shot.  Shots without a _reversed.mov
+            // appear with the checkbox disabled (nothing to switch to —
+            // user runs Bake first to add the reversed variant).
+            if (st) out.push(st);
         }
         out.sort(function (a, b) {
             var an = a.shotName.toLowerCase(), bn = b.shotName.toLowerCase();
@@ -232,7 +257,11 @@
     }
 
     function redrawLabel(lbl, st) {
-        lbl.text = st.shotName + "   —   " + (st.bakeActive ? "bake active" : "plate active");
+        var status;
+        if (!st.hasBake)        status = "plate active  (no reversed variant — run Bake first)";
+        else if (st.bakeActive) status = "bake active";
+        else                    status = "plate active";
+        lbl.text = st.shotName + "   —   " + status;
     }
 
     // Force ScriptUI to repaint immediately so the user sees state
