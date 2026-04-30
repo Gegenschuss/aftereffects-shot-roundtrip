@@ -702,18 +702,13 @@ NOTES
             // out (the bake is the safe choice — keeps a clean forward
             // mainComp + a separate reversed plate for diff-key A/B).
             //
-            // mustBake is locked-on for layers whose remap is "complex" —
-            // extra keys, hold frames, eased segments, or non-default key
-            // positions / values on top of the reversal.  The convert
-            // path can't safely compose another reversal with a custom
-            // remap curve, so bake (which captures the visible output
-            // verbatim) is the only correct route.  toggleBakeSelection
-            // skips these rows so the user can't accidentally untick them.
+            // The source-frame-first walker handles complex-reverse curves
+            // natively (collectShotChainKeys preserves the curve shape
+            // exactly via per-keyframe sampling), so bake is no longer
+            // forced for any class of reversal — the user can pick either
+            // option for any row.
             for (var bf = 0; bf < reversed.length; bf++) {
-                if (reversed[bf].remapKind === "complex-reverse") {
-                    reversed[bf].mustBake = true;
-                    reversed[bf].bake     = true;
-                } else if (typeof reversed[bf].bake !== "boolean") {
+                if (typeof reversed[bf].bake !== "boolean") {
                     reversed[bf].bake = true;
                 }
             }
@@ -767,7 +762,6 @@ NOTES
                 columnWidths: [240, 460, 200, 60]
             });
             function bakeCellText(entry) {
-                if (entry.mustBake) return "✓ 🔒";
                 return entry.bake ? "✓" : "";
             }
             function revRepopulate() {
@@ -790,7 +784,7 @@ NOTES
             warn.preferredSize = [1000, 60];
 
             var bakeHint = w.add("statictext", undefined,
-                "Tip: select one or more rows and click Toggle Bake to render those clips out as new forward-playing plates BEFORE the roundtrip. The layer's source is then swapped to the baked file and time effects are cleared, so re-runs see a clean forward plate.\n      ⚠  “ ✓ 🔒” = layer has custom time-remap keys on top of the reversal. Bake is the only safe path here; the Convert option can’t cleanly compose another reversal with a custom remap curve, so the toggle is locked on.",
+                "Tip: select one or more rows and click Toggle Bake to swap their bake state in bulk. Bake renders an explicit reversed plate into the shot stack so the cut ships from the bake by default; without bake, the cut plays the forward plate backward via the container time-remap and matches the same visual.",
                 { multiline: true });
             bakeHint.preferredSize = [1000, 80];
 
@@ -827,12 +821,8 @@ NOTES
                 var selArr = (sel.length !== undefined) ? sel : [sel];
                 var selIndices = [];
                 for (var si = 0; si < selArr.length; si++) selIndices.push(selArr[si].index);
-                // Skip rows whose remap is "complex-reverse" — bake is
-                // forced on those, the toggle is a no-op.  Other rows
-                // flip as before.
                 for (var sj = 0; sj < selIndices.length; sj++) {
                     var ent = reversed[selIndices[sj]];
-                    if (ent.mustBake) continue;
                     ent.bake = !ent.bake;
                     lb.items[selIndices[sj]].subItems[2].text = bakeCellText(ent);
                 }
