@@ -4034,10 +4034,15 @@ NOTES
                                                 }
                                             }
                                             try { progress.close(); } catch (eRP1) {}
+                                            // renderQueue.render() can't run inside an undo group —
+                                            // AE warns "Undo group mismatch, will attempt to fix."
+                                            // Close FINISH around the call and reopen after.
+                                            try { app.endUndoGroup(); } catch (eUG1) {}
                                             try {
                                                 proj.renderQueue.render();
                                                 revOk = waitForFile(revFile, 20);
                                             } catch (eRevR) { revOk = false; }
+                                            try { app.beginUndoGroup("Roundtrip Finish"); } catch (eUG2) {}
                                             try { progress = makeProgressPanel(); } catch (eRP2) {}
                                         } catch (eRevSetup) { revOk = false; }
                                         try { if (revRq) revRq.remove(); } catch (eRRm) {}
