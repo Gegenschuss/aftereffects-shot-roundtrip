@@ -56,10 +56,10 @@
             file:   "select-version/select_version.jsx"
         },
         {
-            group:  "Roundtrip",
+            group:  "Time",
             icon:   "⇄",
             label:  "Switch Variant",
-            tip:    "Per-shot toggle between {shot}_plate.mov (default) and {shot}_reversed.mov as the active source in {shot}_stack. Atomically flips the container's time-remap values around the plate-range midpoint at the same time so the cut keeps playing the same beats at the same master times — just from the opposite source. Click once to swap, click again to swap back. Use for diff-key A/B comparisons on baked reversed cuts. Requires Bake to have run for the selected shots.",
+            tip:    "Per-shot toggle between {shot}_reversed.mov (the bake; default after roundtrip) and {shot}_plate.mov (the forward render) as the active source in {shot}_stack. Atomically flips the container's time-remap values around the plate-range midpoint at the same time so the cut keeps playing the same beats at the same master times — just from the opposite source. Click once to swap, click again to swap back. Idempotent. Use for diff-key A/B comparisons on baked reversed cuts. Requires Bake to have run for the selected shots.",
             file:   "switch-variant/switch_variant.jsx"
         },
         {
@@ -104,6 +104,7 @@
     // grey everywhere, switch to iconbutton + PNG assets.
     var GROUP_COLORS = {
         "Roundtrip":   [0.45, 0.75, 1.00, 1.0], // cyan-ish
+        "Time":        [0.85, 0.55, 0.95, 1.0], // violet — time-domain helpers
         "Project":     [0.95, 0.85, 0.45, 1.0], // gold
         "Diagnostics": [0.70, 0.70, 0.70, 1.0]  // neutral grey — read-only debug tools
     };

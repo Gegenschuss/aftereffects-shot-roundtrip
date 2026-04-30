@@ -3420,7 +3420,7 @@ NOTES
                 var pPath = new File(fsShotPlate.fsName + "/" + shotName + "_plate.mov");
                 om.file = pPath;
 
-                renderItems.push({ n: shotName, p: pPath, c: shotComp, s: fullStart, w: osWidth, h: osHeight, cs: cutStart, cd: cutDuration, bin: shotBin, rq: rq, pc: stackComp, src: source, mainLayerIdx: item.mainLayerIdx });
+                renderItems.push({ n: shotName, p: pPath, c: shotComp, s: fullStart, w: osWidth, h: osHeight, cs: cutStart, cd: cutDuration, bin: shotBin, rq: rq, pc: stackComp, src: source, mainLayerIdx: item.mainLayerIdx, cc: containerComp });
 
                 var cutDurationFrames = Math.round(cutDuration * safeFPS);
                 nukeDataList.push({
@@ -4030,17 +4030,78 @@ NOTES
                                                     revL.startTime = 0;
                                                     try { revL.position.setValue([ri.w / 2, ri.h / 2]); } catch (eBPos) {}
                                                     revL.label = 8;
-                                                    // Disabled by default so the container's
-                                                    // descending time-remap (which already
-                                                    // reverses the cut visually by playing
-                                                    // the forward plate backward) doesn't
-                                                    // double-reverse against the explicitly-
-                                                    // reversed bake.  User toggles it on for
-                                                    // diff-key A/B by enabling the layer.
-                                                    try { revL.enabled = false; } catch (eRevEn) {}
-                                                    try { revL.comment = "Reversed variant of " + ri.n + "_plate (rendered from _stack via wrapper time-remap). Disabled by default — toggle on to use as the active variant for diff-key A/B; remember to also flip the container's time-remap from descending to ascending for the cut to play correctly."; } catch (eRComm) {}
+                                                    // Default ACTIVE for baked shots — the
+                                                    // bake is the canonical deliverable for
+                                                    // the reversed cut, so the user wants it
+                                                    // playing in the master edit by default.
+                                                    // Plate.mov stays in the stack (just
+                                                    // disabled) for diff-key A/B via Switch
+                                                    // Variant.
+                                                    try { revL.enabled = true; } catch (eRevEn) {}
+                                                    try { revL.comment = "Reversed variant of " + ri.n + "_plate (rendered from _stack via wrapper time-remap). Active by default after roundtrip; the forward plate is also in the stack (disabled) — use Switch Variant in the panel to swap."; } catch (eRComm) {}
                                                     try { revL.property("Marker").setValueAtTime(cutInPP,  cutMarker("cut in"));  } catch (eRBM1) {}
                                                     try { revL.property("Marker").setValueAtTime(cutOutPP, cutMarker("cut out")); } catch (eRBM2) {}
+
+                                                    // Disable plate.mov so the bake is the only
+                                                    // audible/visible variant.  Find by suffix
+                                                    // (the auto-rendered plate is named
+                                                    // {shot}_plate.mov; user-imported plate
+                                                    // variants follow the same convention).
+                                                    var bakePlateLyr = null;
+                                                    for (var bpl = 1; bpl <= tPrecomp.numLayers; bpl++) {
+                                                        var bplLyr;
+                                                        try { bplLyr = tPrecomp.layer(bpl); } catch (eBPL) { continue; }
+                                                        if (!bplLyr || !bplLyr.source || !bplLyr.source.name) continue;
+                                                        if (/_plate\.mov$/.test(bplLyr.source.name)) { bakePlateLyr = bplLyr; break; }
+                                                    }
+                                                    if (bakePlateLyr) { try { bakePlateLyr.enabled = false; } catch (eBPED) {} }
+
+                                                    // Mirror the container's time-remap values
+                                                    // around the plate-range midpoint so the
+                                                    // cut keeps playing the same content at the
+                                                    // same master times — just sourced from the
+                                                    // bake instead of the forward plate.  Same
+                                                    // math the panel's Switch Variant tool uses;
+                                                    // applied here once at roundtrip time so the
+                                                    // user lands in "bake-active" state without
+                                                    // an extra click.
+                                                    try {
+                                                        var bakeContainerComp = ri.cc;
+                                                        var bakeShotComp      = ri.c;
+                                                        if (bakeContainerComp && bakeContainerComp.numLayers >= 1 && bakeShotComp) {
+                                                            var bakeInner = bakeContainerComp.layer(1);
+                                                            // Find the stack ppLayer inside shotComp
+                                                            var bakePp = null;
+                                                            for (var bpi = 1; bpi <= bakeShotComp.numLayers; bpi++) {
+                                                                var bpil;
+                                                                try { bpil = bakeShotComp.layer(bpi); } catch (eBPI) { continue; }
+                                                                if (bpil && bpil.source instanceof CompItem &&
+                                                                    /_stack(?:_OS)?$/.test(bpil.source.name)) {
+                                                                    bakePp = bpil;
+                                                                    break;
+                                                                }
+                                                            }
+                                                            if (bakeInner && bakePp && bakeInner.timeRemapEnabled) {
+                                                                var bakeMid = bakePp.startTime + bakePp.outPoint;
+                                                                var bakeShotDur = 0;
+                                                                try { bakeShotDur = bakeShotComp.duration; } catch (eBSD) {}
+                                                                if (bakeShotDur <= 0) bakeShotDur = bakeMid;
+                                                                var bakeTr = bakeInner.property("Time Remap");
+                                                                if (bakeTr) {
+                                                                    var bakeNK = 0;
+                                                                    try { bakeNK = bakeTr.numKeys; } catch (eBNK) {}
+                                                                    for (var bk = 1; bk <= bakeNK; bk++) {
+                                                                        var bOld;
+                                                                        try { bOld = bakeTr.keyValue(bk); } catch (eBKV) { continue; }
+                                                                        var bNew = bakeMid - bOld;
+                                                                        if (bNew < 0)            bNew = 0;
+                                                                        if (bNew > bakeShotDur)  bNew = bakeShotDur;
+                                                                        try { bakeTr.setValueAtKey(bk, bNew); } catch (eBSV) {}
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    } catch (eBakeFlip) {}
                                                 } catch (eRevAdd) {}
                                             }
                                         }
