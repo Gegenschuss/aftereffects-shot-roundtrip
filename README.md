@@ -223,17 +223,19 @@ work is underway. The pipeline is designed around this:
     <img src="docs/reversal_warning.png" width="560" alt="Reversed clips detected — manual check required">
 
 
-    Before anything else, negative-stretch reversals are rewritten
-    into their time-remap equivalent (stretch → `100`, time-remap
-    keyframes that reproduce the reversed playback). Same visual
-    result, but the pipeline handles the remap form correctly
-    end-to-end. A difference-key comparison against the original
-    reversed layer may show a minor sub-frame shift at cut
-    boundaries — negligible in normal viewing, but worth knowing
-    if you're diff-matting converted vs. original. The
-    [Reverse Stretch → Remap](#helpers) helper exposes the same
-    conversion as a standalone button so you can preview or debug
-    it on one layer at a time.
+    Internally the roundtrip never mutates the source layers to
+    handle reversal. A chain walker reads the original time-remap /
+    stretch state from the master layer all the way down to the
+    deepest footage, computes the required plate range from the
+    min/max source frames the cut actually touches (plus handles),
+    and writes `(masterT, sourceFrame)` keyframes onto the new
+    `{shot}_container`'s inner layer so the cut plays back exactly
+    as it did before — same source frames at the same master times.
+    No stretch conversion, no auto-precompose pre-pass; the original
+    selection stays untouched until the wrapping happens. The
+    [Reverse Stretch → Remap](#helpers) helper in `ae-little-toolbox`
+    still exposes a standalone stretch→remap conversion if you want
+    it for non-roundtrip use.
 
     **Bake** (default ON, per-row checkbox in the warning dialog).
     For each reversed clip ticked Bake, after the main render
@@ -262,12 +264,14 @@ work is underway. The pipeline is designed around this:
     dialog will flag.
 
   - **Non-reversed time effects** (forward ramps, non-negative
-    stretches) proceed silently. Top-level ones get auto-precomposed
-    (see [Precompose Trimmed](#helpers)) so the plate renders forward
-    at 100%. Nested ones are just left as-is — the artist gets the
-    ramped plate, which is usually the editorial intent. They're
-    listed passively as tags next to each shot in the Confirm Shots
-    dialog, so you can eyeball them but aren't forced to act.
+    stretches) proceed silently. The chain walker handles them the
+    same way it handles reversals: it samples every interior
+    time-remap key plus the cut boundaries, projects them up to the
+    master timeline, and bakes the result into the new container's
+    inner time-remap. The artist gets the ramped plate that
+    reproduces the editorial intent. They're listed passively as
+    tags next to each shot in the Confirm Shots dialog, so you can
+    eyeball them but aren't forced to act.
 
   Disabled, guide, null, adjustment, text, and shape layers are
   ignored by the scan — they can't contribute reversed pixels to the
