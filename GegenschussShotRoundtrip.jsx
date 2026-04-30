@@ -59,7 +59,7 @@
             group:  "Time",
             icon:   "⇄",
             label:  "Switch Variant",
-            tip:    "Per-shot toggle between {shot}_reversed.mov (the bake; default after roundtrip) and {shot}_plate.mov (the forward render) as the active source in {shot}_stack. Atomically flips the container's time-remap values around the plate-range midpoint at the same time so the cut keeps playing the same beats at the same master times — just from the opposite source. Click once to swap, click again to swap back. Idempotent. Use for diff-key A/B comparisons on baked reversed cuts. Requires Bake to have run for the selected shots.",
+            tip:    "Preflight dialog listing every shot _container in the project with a checkbox showing which variant is currently active (☐ plate / ☑ bake). Click a row's checkbox to swap that shot's active variant atomically — toggles enabled flags on plate.mov + reversed.mov in the stack AND mirrors the container's time-remap values around the plate-range midpoint so the cut keeps playing the same content at the same master times, just from the opposite source. Bulk buttons: All → Bake, All → Plate, Refresh.",
             file:   "switch-variant/switch_variant.jsx"
         },
         {
