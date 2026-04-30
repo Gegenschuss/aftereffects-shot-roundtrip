@@ -1184,86 +1184,6 @@ NOTES
         // model the user works in mentally ("min/max source frame + 50f
         // handle = plate, everything else offsets from there").
 
-        // ─────────────────────────────────────────────────────────────────
-        // Effect transplant — copy effects from one layer onto another,
-        // preserving values, keyframes, and expressions.  Used to carry
-        // over user-applied effects on chain-deep layers (e.g. Transform
-        // tweaks the user added to {shot}_comp inside the original
-        // {shot}_container) onto the new container's inner layer when
-        // the script wraps + replaceSources upstream.  Effects on the
-        // master layer itself already migrate via precompose's
-        // moveAllAttributes=true; this fills the gap for deeper layers.
-        // ─────────────────────────────────────────────────────────────────
-        function _copyPropertyTree(srcGrp, dstGrp) {
-            var n = 0;
-            try { n = srcGrp.numProperties || 0; } catch (eN) {}
-            for (var i = 1; i <= n; i++) {
-                var sp;
-                try { sp = srcGrp.property(i); } catch (eP) { continue; }
-                if (!sp) continue;
-                var spMatch;
-                try { spMatch = sp.matchName; } catch (eM) { continue; }
-                var dp = null;
-                try { dp = dstGrp.property(spMatch); } catch (eDp) {}
-                if (!dp) continue;
-                // Expression first (so static value writes don't clobber it)
-                try {
-                    if (sp.canSetExpression && sp.expression) {
-                        dp.expression = sp.expression;
-                        try { dp.expressionEnabled = sp.expressionEnabled; } catch (eEx) {}
-                    }
-                } catch (eExpr) {}
-                // Keyframes if any, otherwise static value
-                var nk = 0;
-                try { nk = sp.numKeys || 0; } catch (eNK) {}
-                if (nk > 0) {
-                    for (var k = 1; k <= nk; k++) {
-                        try { dp.setValueAtTime(sp.keyTime(k), sp.keyValue(k)); } catch (eK) {}
-                        try {
-                            dp.setInterpolationTypeAtKey(k,
-                                sp.keyInInterpolationType(k),
-                                sp.keyOutInterpolationType(k));
-                        } catch (eIT) {}
-                    }
-                } else {
-                    try {
-                        if (typeof sp.value !== "undefined") dp.setValue(sp.value);
-                    } catch (eVal) {}
-                }
-                // Recurse into sub-properties
-                var subN = 0;
-                try { subN = sp.numProperties || 0; } catch (eS) {}
-                if (subN > 0) {
-                    try { _copyPropertyTree(sp, dp); } catch (eRec) {}
-                }
-            }
-        }
-        function copyLayerEffects(srcLayer, dstLayer) {
-            if (!srcLayer || !dstLayer) return 0;
-            var srcFx, dstFx;
-            try { srcFx = srcLayer.property("ADBE Effect Parade"); } catch (eS) { return 0; }
-            try { dstFx = dstLayer.property("ADBE Effect Parade"); } catch (eD) { return 0; }
-            if (!srcFx || !dstFx) return 0;
-            var n = 0;
-            try { n = srcFx.numProperties || 0; } catch (eN) {}
-            var copied = 0;
-            for (var i = 1; i <= n; i++) {
-                var sFx;
-                try { sFx = srcFx.property(i); } catch (eP) { continue; }
-                if (!sFx) continue;
-                var mn;
-                try { mn = sFx.matchName; } catch (eM) { continue; }
-                var newFx = null;
-                try { newFx = dstFx.addProperty(mn); } catch (eAdd) {}
-                if (!newFx) continue;
-                try { newFx.name = sFx.name; } catch (eFn) {}
-                try { newFx.enabled = sFx.enabled; } catch (eEn) {}
-                _copyPropertyTree(sFx, newFx);
-                copied++;
-            }
-            return copied;
-        }
-
         // Inverse of mapTimeToSource: given a source time `s` produced
         // by `layer`'s time effect, find the comp time `t` such that
         // mapTimeToSource(layer, t) === s.
@@ -1498,6 +1418,30 @@ NOTES
         // chainKeys extend past the cut and where the dynamicLink
         // wrapper extends to).  handleFrames is in MASTER frames per
         // user setting, so we compute master-time handleSec from it.
+
+        // Heuristic for picking the per-shot strategy: the precomp path
+        // (rename + deep replaceSource) preserves effects on chain-deep
+        // layers natively, INCLUDING analyse-bearing effects like Warp
+        // Stabilizer / 3D Camera Tracker whose internal cache is lost
+        // when an effect is rebuilt via addProperty + property-tree
+        // copy.  The wrap-and-replace path is simpler and supports the
+        // bake-flip default-active behaviour, but it can only preserve
+        // effects on the master layer (precompose moveAllAttributes=
+        // true moves them).  We use the precomp path only when there's
+        // something to lose — i.e. when any chain layer below the
+        // master has effects or its own time-remap.
+        function chainHasInnerEffectsOrTimeRemap(chain) {
+            for (var ci = 1; ci < chain.length; ci++) {
+                var c = chain[ci];
+                try { if (c.timeRemapEnabled) return true; } catch (eTR) {}
+                try {
+                    var fxg = c.property("ADBE Effect Parade");
+                    if (fxg && fxg.numProperties > 0) return true;
+                } catch (eFX) {}
+            }
+            return false;
+        }
+
         function buildShotPlan(masterLayer, planHandleFrames, mainCompFrameRate, mainCompDur) {
             var walked = walkChainToFootage(masterLayer);
             if (!walked) return null;
@@ -3105,24 +3049,112 @@ NOTES
                 shotComp.markerProperty.setValueAtTime(cutStart, cutMarker("cut in"));
                 shotComp.markerProperty.setValueAtTime(cutStart + cutDuration, cutMarker("cut out"));
 
-                // ── Wrap master layer in {shot}_container, master timeline ─────
-                // Single uniform path for every shot regardless of whether
-                // the master layer was direct footage, a precomp, a stretch=
-                // -100 reversal, or a complex time-remap.  Native precompose
-                // with moveAllAttributes=true preserves effects, masks,
-                // transforms, expressions, layer flags, and file bindings
-                // (Apply Color LUT etc.).  The container's time-remap is
-                // written from buildShotPlan's chainKeys — every (master
-                // timeline t, footage source frame) pair sampled along the
-                // chain — so the cut's curve shape is preserved exactly
-                // without any conversion / pruning / bake-flip dance.
+                // ── Pick container strategy ──────────────────────────
+                // Two paths:
+                //
+                //   Direct-footage / no-inner-fx (chain length 1, OR
+                //   chain length > 1 with no FX / time-remap on inner
+                //   layers): wrap the master layer in {shot}_container
+                //   via precompose(moveAllAttributes=true), replaceSource
+                //   the inner layer onto shotComp, write chainKeys to
+                //   the inner's time-remap.  Effects on the master move
+                //   natively via precompose.  Bake-flip default-active
+                //   works because the inner has chainKeys to mirror.
+                //
+                //   Precomp / inner-fx (chain length > 1 AND inner
+                //   layers have effects or time-remap): rename the
+                //   existing top precomp to {shot}_container and
+                //   replaceSource on the deepest footage layer.  Every
+                //   chain layer's effects, expressions, time-remap, and
+                //   internal analyse caches (Warp Stabilizer etc.) are
+                //   preserved natively because no layer is recreated.
+                //   The chain's existing time effects continue to drive
+                //   playback — no chainKeys needed at the top.
+                //
+                // The heuristic is conservative: precomp path only when
+                // there's something to lose.  Common case (direct
+                // footage with stretch=-100, simple precomp around
+                // direct footage) takes the simpler wrap path.
                 var origInPoint   = layer.inPoint;
                 var origOutPoint  = layer.outPoint;
                 var origLayerLabel = 0;
                 try { origLayerLabel = layer.label; } catch (eLbl0) {}
                 var layerIdx     = layer.index;
 
+                var usePrecompPath = (plan.chain.length > 1) &&
+                                     chainHasInnerEffectsOrTimeRemap(plan.chain);
+
                 var containerComp;
+                if (usePrecompPath) {
+                    // ── PRECOMP PATH ─────────────────────────────────
+                    // Rename the existing top precomp; the master
+                    // mainComp layer keeps pointing at it.  Then
+                    // replaceSource the deepest footage layer onto
+                    // shotComp.  Chain stays intact natively.
+                    containerComp = layer.source;
+                    try { containerComp.name = shotName + "_container" + osSuffix; } catch (eRn) {}
+                    try { containerComp.parentFolder = shotBin; } catch (ePF) {}
+                    try { containerComp.label = 8; } catch (eLbl) {}
+
+                    var deepFootageLyr = plan.footageLayer;
+                    var preReplaceInP   = 0, preReplaceOutP = 0;
+                    var preReplaceTREnb = false;
+                    try { preReplaceInP   = deepFootageLyr.inPoint;          } catch (e) {}
+                    try { preReplaceOutP  = deepFootageLyr.outPoint;         } catch (e) {}
+                    try { preReplaceTREnb = deepFootageLyr.timeRemapEnabled; } catch (e) {}
+
+                    deepFootageLyr.replaceSource(shotComp, false);
+
+                    // Strip any AE-auto keys outside the cut bounds —
+                    // replaceSource on a time-remapped layer auto-inserts
+                    // boundary keys at startTime / startTime+srcDur, and
+                    // those would let AE auto-extend outPoint past the
+                    // cut span.
+                    if (preReplaceTREnb) {
+                        try {
+                            var prTr = deepFootageLyr.property("Time Remap");
+                            if (prTr) {
+                                var prCutIn  = Math.min(preReplaceInP, preReplaceOutP);
+                                var prCutOut = Math.max(preReplaceInP, preReplaceOutP);
+                                var prEPS    = 1e-3;
+                                for (var prk = prTr.numKeys; prk >= 1; prk--) {
+                                    var prkt;
+                                    try { prkt = prTr.keyTime(prk); } catch (eKT) { continue; }
+                                    if (prkt < prCutIn - prEPS || prkt > prCutOut + prEPS) {
+                                        try { prTr.removeKey(prk); } catch (eRK) {}
+                                    }
+                                }
+                            }
+                        } catch (ePostPrune) {}
+                    }
+
+                    // Restore in/out (replaceSource may have extended them
+                    // to the new source's duration).
+                    try {
+                        deepFootageLyr.inPoint  = preReplaceInP;
+                        deepFootageLyr.outPoint = preReplaceOutP;
+                    } catch (eIO) {}
+
+                    // plateInner markers in shotComp's source-frame domain.
+                    plateInner.property("Marker").setValueAtTime(cutStart,               cutMarker("cut in"));
+                    plateInner.property("Marker").setValueAtTime(cutStart + cutDuration, cutMarker("cut out"));
+
+                    // Markers on the deepest footage layer (now showing
+                    // shotComp).
+                    try { deepFootageLyr.property("Marker").setValueAtTime(preReplaceInP,  cutMarker("cut in"));  } catch (eFM1) {}
+                    try { deepFootageLyr.property("Marker").setValueAtTime(preReplaceOutP, cutMarker("cut out")); } catch (eFM2) {}
+
+                    // Skip the rest of the wrap-and-replace block below.
+                    // Re-bind / patch loops are no-ops here (layerIdx
+                    // didn't change), but we still want the renderItems
+                    // push and stack-creation downstream — those run
+                    // outside this if/else.
+                } else {
+                    // ── DIRECT-FOOTAGE / WRAP PATH ──────────────────
+                    // Native precompose with moveAllAttributes=true
+                    // moves effects + transforms onto containerInner.
+                    // chainKeys are written on containerInner's time-
+                    // remap so the cut's curve shape is preserved.
                 try {
                     containerComp = mainComp.layers.precompose([layerIdx], shotName + "_container" + osSuffix, true);
                 } catch (ePC) {
@@ -3167,20 +3199,11 @@ NOTES
                 if (containerInner) {
                     containerInner.replaceSource(shotComp, false);
 
-                    // Effect transplant — copy effects from every chain
-                    // layer BETWEEN the master (chain[0], whose effects
-                    // are already on containerInner via precompose's
-                    // moveAllAttributes) and the deepest footage onto
-                    // containerInner.  Without this, effects the user
-                    // applied to e.g. {shot}_comp (the layer one level
-                    // inside the original {shot}_container) are stranded
-                    // on the orphaned old layer once replaceSource swaps
-                    // the chain out.
-                    try {
-                        for (var ce = 1; ce < plan.chain.length; ce++) {
-                            try { copyLayerEffects(plan.chain[ce], containerInner); } catch (eCEPL) {}
-                        }
-                    } catch (eCEFX) {}
+                    // Note: chain-deep effect transplant is handled by
+                    // the precomp path (above), which preserves them
+                    // natively.  This wrap path is reached only when
+                    // chain layers below the master have no effects /
+                    // time-remap to lose, so there's nothing to copy.
 
                     // Reset every property AE may have inherited from the
                     // original layer — stretch could be -100, time-remap
@@ -3262,8 +3285,10 @@ NOTES
                         } catch (eOsAP) {}
                     }
                 }
+                } // end else (direct-footage / wrap path)
 
                 // Re-bind `layer` to the wrapper precomp layer in mainComp.
+                // (No-op for precomp path — layerIdx didn't change.)
                 try { layer = mainComp.layer(layerIdx); } catch (eLIdx) {}
                 var sourceMatchOK = false;
                 try { sourceMatchOK = (layer && layer.source === containerComp); } catch (eSM) {}
@@ -3278,12 +3303,19 @@ NOTES
                 // Wrapper layer in mainComp: startTime=0 keeps containerComp.t
                 // identical to mainComp.t (no time-axis shift).  in/out at
                 // [masterIn, masterOut] preserves the editorial cut window.
+                //
+                // For the precomp path, the master layer is the original
+                // (not a fresh wrapper) — its startTime/in/out are already
+                // correct and resetting startTime to 0 would shift the
+                // chain by that amount.  Leave them alone in that path.
                 if (layer) {
-                    try {
-                        layer.startTime = 0;
-                        layer.inPoint   = plan.masterIn;
-                        layer.outPoint  = plan.masterOut;
-                    } catch (eTiming) {}
+                    if (!usePrecompPath) {
+                        try {
+                            layer.startTime = 0;
+                            layer.inPoint   = plan.masterIn;
+                            layer.outPoint  = plan.masterOut;
+                        } catch (eTiming) {}
+                    }
                     try { layer.label = origLayerLabel; } catch (eL1) {}
                 }
 
