@@ -240,16 +240,17 @@ work is underway. The pipeline is designed around this:
     finishes the roundtrip wraps the shot's `_stack` precomp and
     renders it back out as a forward-playing reversed plate
     `{shot}_reversed.mov` into `{Roundtrip}/_baked/`. The baked
-    file is added to `_stack` as a top-layer variant (blue label).
-    The original mainComp layer's time-remap keys are mirrored
-    descending → ascending so the edit plays the cut **forward**
-    — pixel-matching the auto-rendered plate. The bake variant
-    in `_stack` is the explicit reverse, ready for difference-key
-    A/B against the natural plate or for use as the active plate
-    via Select Version. Bottom row of the dialog has
-    `Toggle Bake` / `Select All` / `Deselect All` for bulk
-    flipping; the Continue button updates live to "Continue: N
-    bake, M convert" so you see the split before you commit.
+    file is added to `_stack` as a top-layer variant (blue label),
+    **disabled by default**. The container's time-remap stays
+    descending so the edit plays the original reverse cut from the
+    forward `_plate.mov` (which is on top and enabled). The baked
+    `_reversed.mov` sits underneath, ready for difference-key A/B —
+    use **Switch Variant** in the panel to flip both atomically
+    (variant enable/disable + container time-remap mirror) without
+    breaking the cut. Bottom row of the dialog has `Toggle Bake` /
+    `Select All` / `Deselect All` for bulk flipping; the Continue
+    button updates live to "Continue: N bake, M convert" so you see
+    the split before you commit.
 
     **Color Time-Reverse Layers** (button in the Settings dialog).
     Walks the active comp's top-level layers in one undo step:
@@ -405,6 +406,22 @@ work is underway. The pipeline is designed around this:
   a render starts. Re-runs always re-render the ORIGINAL plate, never
   the variant — so running it twice gives you a fresh raw plate, not a
   copy of last pass's output.
+
+- **Switch Variant** — Per-shot atomic toggle between
+  `{shot}_plate.mov` (the forward render — default) and
+  `{shot}_reversed.mov` (the bake) as the active source in
+  `{shot}_stack`. The default state is descending time-remap on
+  `{shot}_comp` + plate.mov on top, which plays the forward plate
+  backward to match the original reverse-cut visual. To switch to
+  the baked reversed variant for difference-key A/B, you can't just
+  enable `_reversed.mov` — the container's time-remap would
+  double-reverse against the already-time-mirrored bake. Switch
+  Variant flips both at once: toggles the enabled flags AND mirrors
+  the time-remap values around the plate-range midpoint
+  (`ppLayer.startTime + ppLayer.outPoint`). Click once to swap,
+  click again to swap back. Idempotent — twice = identity. Operates
+  on selected `shot_NNN_container` layers in mainComp; skips shots
+  without `_reversed.mov` in the stack (bake hasn't run for them).
 
 - **Export Shot XML** — Exports an FCPXML 1.8 timeline of all `*_comp`
   compositions for import into DaVinci Resolve. For each comp, the active

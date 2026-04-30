@@ -56,6 +56,13 @@
             file:   "select-version/select_version.jsx"
         },
         {
+            group:  "Roundtrip",
+            icon:   "⇄",
+            label:  "Switch Variant",
+            tip:    "Per-shot toggle between {shot}_plate.mov (default) and {shot}_reversed.mov as the active source in {shot}_stack. Atomically flips the container's time-remap values around the plate-range midpoint at the same time so the cut keeps playing the same beats at the same master times — just from the opposite source. Click once to swap, click again to swap back. Use for diff-key A/B comparisons on baked reversed cuts. Requires Bake to have run for the selected shots.",
+            file:   "switch-variant/switch_variant.jsx"
+        },
+        {
             group:  "Project",
             icon:   "↪",
             label:  "Export Shot XML",
