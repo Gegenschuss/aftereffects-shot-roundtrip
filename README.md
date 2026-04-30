@@ -419,9 +419,13 @@ work is underway. The pipeline is designed around this:
   Variant flips both at once: toggles the enabled flags AND mirrors
   the time-remap values around the plate-range midpoint
   (`ppLayer.startTime + ppLayer.outPoint`). Click once to swap,
-  click again to swap back. Idempotent — twice = identity. Operates
-  on selected `shot_NNN_container` layers in mainComp; skips shots
-  without `_reversed.mov` in the stack (bake hasn't run for them).
+  click again to swap back. Idempotent — twice = identity.
+  Project-wide preflight dialog: lists every `shot_NNN_container`
+  with a checkbox showing the current variant (☐ plate / ☑ bake),
+  bulk buttons (`All → Bake` / `All → Plate` / `Refresh`). Shots
+  without a `{shot}_reversed.mov` in their stack are listed but
+  greyed out with a "run Bake first" hint — the dialog only acts on
+  shots that actually have a reversed variant to switch to.
 
 - **Export Shot XML** — Exports an FCPXML 1.8 timeline of all `*_comp`
   compositions for import into DaVinci Resolve. For each comp, the active
