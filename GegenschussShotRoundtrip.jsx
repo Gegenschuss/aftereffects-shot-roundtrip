@@ -79,9 +79,16 @@
         {
             group:  "Diagnostics",
             icon:   "⌕",
-            label:  "Dump Timing State",
-            tip:    "Read-only snapshot of every layer's timing state in the active comp + every nested precomp. Captures inPoint/outPoint/startTime, time stretch, time-remap keyframes (time/value/interp/ease), source duration, layer markers, and parent linkage. Run BEFORE and AFTER each roundtrip phase, tag each snapshot, then diff the resulting text files to see exactly what changed. Useful for debugging time-remap / time-reverse handling on footage layers and nested precomps. Dump file is saved next to the .aep.",
-            file:   "diagnostics/dump_timing_state.jsx"
+            label:  "Dump Source-Range Chain",
+            tip:    "Read-only source-frame-range tracer. For every top-level visible layer in the active comp, walks down through every nested precomp + time-effect (stretch / time-remap) and reports the FOOTAGE source frame range the master cut should be showing — with the math at each step. Then scans the project for *_stack precomps and compares the actual plate range each one covers against the expected range, flagging mismatches. Run BEFORE the roundtrip to capture ground-truth, then AFTER each version to localize where plate-range / time-remap math diverges. Dump file is saved next to the .aep.",
+            file:   "diagnostics/dump_source_range_chain.jsx"
+        },
+        {
+            group:  "Diagnostics",
+            icon:   "⊕",
+            label:  "Deep Inspect",
+            tip:    "Read-only kitchen-sink dumper for every layer in the active comp + every nested precomp. Captures inPoint/outPoint/startTime/stretch, all flags (enabled/solo/guide/3D/blend mode/label/motionBlur/frameBlending), parent linkage, transform values, time-remap keyframes (with full ease info), layer + comp markers (comment/duration/label/cuePoint), every effect (with sub-properties + values + expressions), expressions on Transform / TimeRemap, and source file paths for footage. Then runs a per-frame source-frame trace: for every top-level layer, walks the chain through every nested time-effect and prints the source frame at every chain step for every master frame in [cut_in - handle, cut_out + handle]. Use when you need to know exactly what footage frame is on screen at every master moment, or when an expected effect / expression / marker didn't survive a roundtrip.",
+            file:   "diagnostics/dump_deep_inspect.jsx"
         }
     ];
 
@@ -156,7 +163,7 @@
         brandCol.orientation = "column";
         brandCol.alignment = ["left", "center"];
         brandCol.spacing = 2;
-        var buildDate = brandCol.add("statictext", undefined, "20260429");
+        var buildDate = brandCol.add("statictext", undefined, "20260430");
         // NOTE to editor: keep this date in sync with ship day (YYYYMMDD).
         buildDate.graphics.font = ScriptUI.newFont("Helvetica", "REGULAR", 11);
         buildDate.graphics.foregroundColor = buildDate.graphics.newPen(buildDate.graphics.PenType.SOLID_COLOR, [0.55, 0.55, 0.55, 1], 1);

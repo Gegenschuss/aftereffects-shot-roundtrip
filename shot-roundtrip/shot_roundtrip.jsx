@@ -1031,123 +1031,6 @@ NOTES
         // Same algorithm as helpers/precompose_trimmed.jsx:
         // descending index order, move all attributes, full comp duration, trim to original in/out.
         // Returns true on success, false on failure.
-        function autoPrecomposeTrimmed(comp, layerInfos) {
-            // Snapshot non-affected selection by layer name+index pair. precompose()
-            // collapses comp.selectedLayers to just the most-recently-created
-            // precomp layer, so anything the user had selected that wasn't in
-            // layerInfos would silently drop out — visible as a missing selection
-            // in the later Confirm Shots list. After the loop we re-select those
-            // originals plus every new precomp layer we just created.
-            var trIndices = {};
-            for (var ii = 0; ii < layerInfos.length; ii++) trIndices[layerInfos[ii].index] = true;
-            var preservedSelection = [];
-            for (var pi = 1; pi <= comp.numLayers; pi++) {
-                var pl = comp.layer(pi);
-                if (pl.selected && !trIndices[pi]) preservedSelection.push(pl);
-            }
-            var newPrecompLayers = [];
-
-            layerInfos.sort(function(a, b) { return b.index - a.index; });
-            app.beginUndoGroup("Auto-Precompose for Roundtrip");
-            var aAutoPCBin = null; // lazily created on first precompose
-            try {
-                for (var ap = 0; ap < layerInfos.length; ap++) {
-                    if (progress.isCancelled()) { app.endUndoGroup(); return false; }
-                    var aInfo = layerInfos[ap];
-                    try { progress.update(null,
-                        "layer " + (ap + 1) + " of " + layerInfos.length + ": " + aInfo.name,
-                        9 + 2 * (ap / Math.max(1, layerInfos.length))); } catch(eProgAP) {}
-
-                    var aBaseName = aInfo.name + "_precomp";
-                    var aName = aBaseName;
-                    var aSuffix = 1;
-                    while (true) {
-                        var aExists = false;
-                        for (var ak = 1; ak <= proj.numItems; ak++) { if (proj.item(ak).name === aName) { aExists = true; break; } }
-                        if (!aExists) break;
-                        aName = aBaseName + "_" + aSuffix; aSuffix++;
-                    }
-
-                    // Capture the original layer's label colour so we can
-                    // restore it on the new wrapper layer in mainComp.
-                    // AE's precompose otherwise hands the wrapper layer
-                    // a default label that doesn't match anything the
-                    // user might have set up (e.g. the "Color Time-
-                    // Reverse Layers" pass colours reversed clips blue).
-                    var aOriginalLabel = 0;
-                    try { aOriginalLabel = comp.layer(aInfo.index).label; } catch (eLbl0) {}
-
-                    var aNewComp = comp.layers.precompose([aInfo.index], aName, true);
-                    aNewComp.duration = comp.duration;
-
-                    // Normalise the WRAPPED inner layer's in/out.  AE's
-                    // precompose() will silently extend outPoint to include
-                    // the last time-remap keyframe, even if that key sits
-                    // far past the original cut.  For complex / partially-
-                    // reversed remaps this leaves the inner layer running
-                    // tens of seconds long, throwing the bake render and
-                    // every downstream marker / handle calculation off.
-                    // Force the inner layer back to the original cut span
-                    // (in/out length).  Keys past the new outPoint stay on
-                    // the property but no longer drive playback.
-                    try {
-                        var aInnerL = null;
-                        for (var ai = 1; ai <= aNewComp.numLayers; ai++) {
-                            try { aInnerL = aNewComp.layer(ai); } catch (eAI) {}
-                            if (aInnerL) break;
-                        }
-                        if (aInnerL) {
-                            var aCutDur = aInfo.outPoint - aInfo.inPoint;
-                            if (aCutDur > 0) {
-                                // Match the inner layer span to the cut.
-                                // Keep its inPoint at whatever AE assigned
-                                // (typically 0 in the new precomp's frame),
-                                // just snap outPoint back from the AE-
-                                // extended value.
-                                aInnerL.outPoint = aInnerL.inPoint + aCutDur;
-                            }
-                        }
-                    } catch (eANorm) {}
-
-                    // File the new precomp into /Shots/autoPrecomps/ instead of
-                    // leaving it stranded at the project root alongside whatever
-                    // the user had organised there.
-                    try {
-                        if (!aAutoPCBin) aAutoPCBin = getShotBin(getBinFolder("Shots"), "autoPrecomps");
-                        aNewComp.parentFolder = aAutoPCBin;
-                    } catch (eBin) {}
-
-                    var aPrecompLayer = null;
-                    for (var aj = 1; aj <= comp.numLayers; aj++) {
-                        if (comp.layer(aj).source === aNewComp) { aPrecompLayer = comp.layer(aj); break; }
-                    }
-                    if (aPrecompLayer) {
-                        aPrecompLayer.inPoint  = aInfo.inPoint;
-                        aPrecompLayer.outPoint = aInfo.outPoint;
-                        try { aPrecompLayer.label = aOriginalLabel; } catch (eLbl1) {}
-                        newPrecompLayers.push(aPrecompLayer);
-                    }
-                }
-            } catch(eAP) {
-                alert("Auto-precompose failed:\n" + eAP.message + "\nLine: " + eAP.line);
-                app.endUndoGroup();
-                return false;
-            }
-
-            // Restore the combined selection: preserved originals + every new precomp.
-            try {
-                for (var dsel = 1; dsel <= comp.numLayers; dsel++) comp.layer(dsel).selected = false;
-                for (var psi = 0; psi < preservedSelection.length; psi++) {
-                    try { preservedSelection[psi].selected = true; } catch(ePs) {}
-                }
-                for (var npi = 0; npi < newPrecompLayers.length; npi++) {
-                    try { newPrecompLayers[npi].selected = true; } catch(eNp) {}
-                }
-            } catch(eSelPC) {}
-
-            app.endUndoGroup();
-            return true;
-        }
 
         // Recursive: does this comp (or any nested precomp under it) have
         // a layer whose source is `srcItem`? Used by the bake-placement
@@ -1222,7 +1105,23 @@ NOTES
                 try { return layer.property("ADBE Time Remapping").valueAtTime(compTime, false); } catch(e) {}
             }
             var stretch = (layer.stretch !== 0) ? layer.stretch : 100;
-            return (compTime - layer.startTime) * (100 / stretch);
+            var result = (compTime - layer.startTime) * (100 / stretch);
+            // For negative-stretch layers AE anchors layer.startTime one
+            // frame past the last rendered source frame, so subtract a
+            // frameDur to land on the source time that's ACTUALLY on
+            // screen.  Without this the chain walk sits one frame later
+            // in the source than the original cut showed — visible as a
+            // -1 frame slip in the edit after the roundtrip.
+            if (stretch < 0) {
+                var fd = 1.0 / 25; // sane default if containingComp lookup fails
+                try {
+                    if (layer.containingComp && layer.containingComp.frameDuration) {
+                        fd = layer.containingComp.frameDuration;
+                    }
+                } catch (eFd) {}
+                result -= fd;
+            }
+            return result;
         }
 
         // Recursively searches comp for ALL footage layers anywhere in the hierarchy.
@@ -1267,6 +1166,409 @@ NOTES
                 }
             }
             return results;
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        // Source-frame-first shot plan builder
+        // ─────────────────────────────────────────────────────────────────
+        //
+        // For every cut we walk the chain from the master layer down to
+        // the deepest footage WITHOUT mutating anything along the way,
+        // and compute three things:
+        //
+        //   1. visibleRange = min/max footage source frames the cut
+        //                     window touches (after every nested
+        //                     stretch + time-remap is applied)
+        //   2. plateRange   = visibleRange ± handle, clamped to [0, srcDur]
+        //   3. chainKeys    = (masterT, sourceFrame) pairs at the cut
+        //                     boundaries plus every interior key time
+        //                     of any time-remap encountered along the
+        //                     chain — preserving the user's curve shape
+        //                     exactly when the container's time-remap is
+        //                     written from these pairs.
+        //
+        // The plan replaces the old convert-stretch / prune / wrap /
+        // bake-flip pre-pass.  Because we never mutate the master layer
+        // tree before building the plan, the plate range we compute is
+        // always anchored to the original visible source frames — same
+        // model the user works in mentally ("min/max source frame + 50f
+        // handle = plate, everything else offsets from there").
+
+        // ─────────────────────────────────────────────────────────────────
+        // Effect transplant — copy effects from one layer onto another,
+        // preserving values, keyframes, and expressions.  Used to carry
+        // over user-applied effects on chain-deep layers (e.g. Transform
+        // tweaks the user added to {shot}_comp inside the original
+        // {shot}_container) onto the new container's inner layer when
+        // the script wraps + replaceSources upstream.  Effects on the
+        // master layer itself already migrate via precompose's
+        // moveAllAttributes=true; this fills the gap for deeper layers.
+        // ─────────────────────────────────────────────────────────────────
+        function _copyPropertyTree(srcGrp, dstGrp) {
+            var n = 0;
+            try { n = srcGrp.numProperties || 0; } catch (eN) {}
+            for (var i = 1; i <= n; i++) {
+                var sp;
+                try { sp = srcGrp.property(i); } catch (eP) { continue; }
+                if (!sp) continue;
+                var spMatch;
+                try { spMatch = sp.matchName; } catch (eM) { continue; }
+                var dp = null;
+                try { dp = dstGrp.property(spMatch); } catch (eDp) {}
+                if (!dp) continue;
+                // Expression first (so static value writes don't clobber it)
+                try {
+                    if (sp.canSetExpression && sp.expression) {
+                        dp.expression = sp.expression;
+                        try { dp.expressionEnabled = sp.expressionEnabled; } catch (eEx) {}
+                    }
+                } catch (eExpr) {}
+                // Keyframes if any, otherwise static value
+                var nk = 0;
+                try { nk = sp.numKeys || 0; } catch (eNK) {}
+                if (nk > 0) {
+                    for (var k = 1; k <= nk; k++) {
+                        try { dp.setValueAtTime(sp.keyTime(k), sp.keyValue(k)); } catch (eK) {}
+                        try {
+                            dp.setInterpolationTypeAtKey(k,
+                                sp.keyInInterpolationType(k),
+                                sp.keyOutInterpolationType(k));
+                        } catch (eIT) {}
+                    }
+                } else {
+                    try {
+                        if (typeof sp.value !== "undefined") dp.setValue(sp.value);
+                    } catch (eVal) {}
+                }
+                // Recurse into sub-properties
+                var subN = 0;
+                try { subN = sp.numProperties || 0; } catch (eS) {}
+                if (subN > 0) {
+                    try { _copyPropertyTree(sp, dp); } catch (eRec) {}
+                }
+            }
+        }
+        function copyLayerEffects(srcLayer, dstLayer) {
+            if (!srcLayer || !dstLayer) return 0;
+            var srcFx, dstFx;
+            try { srcFx = srcLayer.property("ADBE Effect Parade"); } catch (eS) { return 0; }
+            try { dstFx = dstLayer.property("ADBE Effect Parade"); } catch (eD) { return 0; }
+            if (!srcFx || !dstFx) return 0;
+            var n = 0;
+            try { n = srcFx.numProperties || 0; } catch (eN) {}
+            var copied = 0;
+            for (var i = 1; i <= n; i++) {
+                var sFx;
+                try { sFx = srcFx.property(i); } catch (eP) { continue; }
+                if (!sFx) continue;
+                var mn;
+                try { mn = sFx.matchName; } catch (eM) { continue; }
+                var newFx = null;
+                try { newFx = dstFx.addProperty(mn); } catch (eAdd) {}
+                if (!newFx) continue;
+                try { newFx.name = sFx.name; } catch (eFn) {}
+                try { newFx.enabled = sFx.enabled; } catch (eEn) {}
+                _copyPropertyTree(sFx, newFx);
+                copied++;
+            }
+            return copied;
+        }
+
+        // Inverse of mapTimeToSource: given a source time `s` produced
+        // by `layer`'s time effect, find the comp time `t` such that
+        // mapTimeToSource(layer, t) === s.
+        //
+        //   Stretch case:    t = s * (stretch / 100) + startTime
+        //   Time-remap case: scan keys for the segment whose value
+        //                    range straddles s, then linearly solve
+        //                    inside that segment.  Outside the keyed
+        //                    range, extrapolate from the nearest
+        //                    segment (matches AE's LINEAR-extrap
+        //                    behaviour for valueAtTime).
+        function inverseMapTimeToSource(layer, s) {
+            var stretch = 100, startT = 0;
+            try { stretch = (layer.stretch !== 0) ? layer.stretch : 100; } catch (e) {}
+            try { startT = layer.startTime; } catch (e) {}
+            if (!layer.timeRemapEnabled) {
+                // Inverse of mapTimeToSource's negative-stretch correction:
+                // forward subtracts a frameDur, so inverse adds it back
+                // before applying the stretch/startTime inverse.
+                if (stretch < 0) {
+                    var fdInv = 1.0 / 25;
+                    try {
+                        if (layer.containingComp && layer.containingComp.frameDuration) {
+                            fdInv = layer.containingComp.frameDuration;
+                        }
+                    } catch (eFdInv) {}
+                    s = s + fdInv;
+                }
+                return s * (stretch / 100) + startT;
+            }
+            var tr;
+            try { tr = layer.property("Time Remap"); } catch (e) { return s; }
+            if (!tr) return s;
+            var n = tr.numKeys;
+            if (n < 1) return s;
+            if (n < 2) return tr.keyTime(1);
+            var pairs = [];
+            for (var i = 1; i <= n; i++) {
+                pairs.push({ t: tr.keyTime(i), v: tr.keyValue(i) });
+            }
+            pairs.sort(function (a, b) { return a.t - b.t; });
+            // Try each segment for one whose value range contains s.
+            for (var j = 0; j < pairs.length - 1; j++) {
+                var a = pairs[j], b = pairs[j + 1];
+                var lo = Math.min(a.v, b.v), hi = Math.max(a.v, b.v);
+                if (s >= lo - 1e-6 && s <= hi + 1e-6) {
+                    if (Math.abs(b.v - a.v) < 1e-9) return a.t; // hold frame
+                    return a.t + (b.t - a.t) * (s - a.v) / (b.v - a.v);
+                }
+            }
+            // Outside all segments — extrapolate from whichever end is closer
+            // to s (LINEAR continuation of the first or last segment).
+            var first = pairs[0], second = pairs[1];
+            var preLo = Math.min(first.v, second.v), preHi = Math.max(first.v, second.v);
+            if (s < preLo) {
+                if (Math.abs(second.v - first.v) < 1e-9) return first.t;
+                return first.t + (second.t - first.t) * (s - first.v) / (second.v - first.v);
+            }
+            var L = pairs.length;
+            var penul = pairs[L - 2], last = pairs[L - 1];
+            if (Math.abs(last.v - penul.v) < 1e-9) return last.t;
+            return penul.t + (last.t - penul.t) * (s - penul.v) / (last.v - penul.v);
+        }
+
+        // Walk from master layer down to the deepest footage layer.
+        // Pure read.  Returns:
+        //   { chain: [layer0, layer1, ..., footageLayer],
+        //     visibleRange: { min, max },
+        //     sIn, sOut,                 // pre-min/max ordering, used
+        //                                // by chainKeys boundary mapping
+        //     directionAtLeaf            // "forward" or "reverse"
+        //   }
+        // Returns null if no footage was reached (e.g. solid, missing
+        // source, or all child layers disabled / guides).
+        function walkChainToFootage(masterLayer) {
+            var chain = [];
+            var current = masterLayer;
+            // Master cut bounds in master timeline (normalize negative-
+            // duration reversed-stretch layers where in > out).
+            var rawIn  = masterLayer.inPoint;
+            var rawOut = masterLayer.outPoint;
+            var tIn  = Math.min(rawIn, rawOut);
+            var tOut = Math.max(rawIn, rawOut);
+
+            // Track the directional pair (sIn, sOut) — sIn corresponds
+            // to the master cut's inPoint side, sOut to outPoint.  These
+            // can flip across reversal stages, which is what we need to
+            // know to orient time-remap keys at the leaf.
+            var sIn  = rawIn;
+            var sOut = rawOut;
+
+            while (true) {
+                chain.push(current);
+                sIn  = mapTimeToSource(current, sIn);
+                sOut = mapTimeToSource(current, sOut);
+                var sLo = Math.min(sIn, sOut), sHi = Math.max(sIn, sOut);
+
+                var srcIsFile = false, srcIsComp = false;
+                try {
+                    if (current.source) {
+                        if (current.source instanceof CompItem) srcIsComp = true;
+                        else if (current.source.mainSource && current.source.mainSource.file) srcIsFile = true;
+                    }
+                } catch (eSrcKind) {}
+
+                if (srcIsFile) {
+                    return {
+                        chain: chain,
+                        visibleRange: { min: sLo, max: sHi },
+                        sIn: sIn, sOut: sOut,
+                        directionAtLeaf: (sIn > sOut) ? "reverse" : "forward"
+                    };
+                }
+                if (!srcIsComp) return null;
+
+                // Descend into subComp: pick the first non-guide / non-
+                // null / non-disabled layer whose visible window
+                // overlaps [sLo, sHi].  Matches the script's existing
+                // findAllFootageInPrecomp filter.
+                var subComp = current.source;
+                var pick = null;
+                for (var li = 1; li <= subComp.numLayers; li++) {
+                    var sub;
+                    try { sub = subComp.layer(li); } catch (eL) { continue; }
+                    if (!sub || !sub.hasVideo) continue;
+                    try { if (sub.guideLayer || sub.adjustmentLayer || sub.nullLayer) continue; } catch (eF) {}
+                    try { if (sub.source === null) continue; } catch (eS) {}
+                    try { if (!sub.enabled) continue; } catch (eE) {}
+                    var subInP  = Math.min(sub.inPoint, sub.outPoint);
+                    var subOutP = Math.max(sub.inPoint, sub.outPoint);
+                    if (Math.max(sLo, subInP) >= Math.min(sHi, subOutP) - 1e-4) continue;
+                    pick = sub;
+                    break;
+                }
+                if (!pick) return null;
+                current = pick;
+                // Continue the descent from this layer's containing-comp time.
+            }
+        }
+
+        // Project a master timeline time `masterT` down through the
+        // chain (built by walkChainToFootage) to the footage source frame.
+        function projectMasterToSource(chain, masterT) {
+            var t = masterT;
+            for (var i = 0; i < chain.length; i++) {
+                t = mapTimeToSource(chain[i], t);
+            }
+            return t;
+        }
+
+        // Project a layer's containing-comp time `innerT` UP through
+        // chain[0..depth-1] to master timeline.  Used to position any
+        // interior keyframe time of a deep time-remap layer onto the
+        // master cut so the curve shape is preserved.
+        //
+        // depth = chain index of the layer whose containing-comp time
+        // is `innerT`.  At depth 0 the layer's containing comp IS
+        // mainComp, so innerT is already in master timeline.
+        function projectKeyTimeUp(chain, depth, innerT) {
+            var t = innerT;
+            for (var i = depth - 1; i >= 0; i--) {
+                t = inverseMapTimeToSource(chain[i], t);
+            }
+            return t;
+        }
+
+        // Collect (masterT, sourceFrame) pairs that drive the
+        // container's time-remap.  Always includes the cut boundaries
+        // (masterIn, masterOut) AND the handle-extended boundaries
+        // (masterIn - handleSec, masterOut + handleSec, clamped to
+        // mainComp duration) so the container's inner layer plays
+        // through the handle frames cleanly when dynamicLink extends
+        // its in/out.  For every time-remap layer along the chain
+        // whose own keys fall inside the extended window, projects
+        // each key time UP to master timeline and adds it.  The
+        // result is sorted, deduped, and each masterT is projected
+        // DOWN through the full chain to its corresponding footage
+        // source frame — values are then clamped to [0, srcDur] so
+        // extrapolation past source edges produces the first / last
+        // source frame instead of black.
+        function collectShotChainKeys(chain, masterIn, masterOut, handleSec, mainCompDur, srcDur) {
+            var EPS = 1e-4;
+            var masterInExt  = Math.max(0,           masterIn  - handleSec);
+            var masterOutExt = Math.min(mainCompDur, masterOut + handleSec);
+
+            var keyTimesInMaster = [masterInExt, masterIn, masterOut, masterOutExt];
+
+            for (var d = 0; d < chain.length; d++) {
+                var layer = chain[d];
+                var trEn = false;
+                try { trEn = !!layer.timeRemapEnabled; } catch (eTRen) {}
+                if (!trEn) continue;
+                var tr;
+                try { tr = layer.property("Time Remap"); } catch (eTR) { continue; }
+                if (!tr) continue;
+                var n = 0;
+                try { n = tr.numKeys; } catch (eN) {}
+                for (var k = 1; k <= n; k++) {
+                    var keyT = 0;
+                    try { keyT = tr.keyTime(k); } catch (eKT) { continue; }
+                    var masterT = projectKeyTimeUp(chain, d, keyT);
+                    if (masterT >= masterInExt - EPS && masterT <= masterOutExt + EPS) {
+                        keyTimesInMaster.push(masterT);
+                    }
+                }
+            }
+
+            keyTimesInMaster.sort(function (a, b) { return a - b; });
+            var deduped = [];
+            for (var di = 0; di < keyTimesInMaster.length; di++) {
+                if (di === 0 || Math.abs(keyTimesInMaster[di] - keyTimesInMaster[di - 1]) > EPS) {
+                    deduped.push(keyTimesInMaster[di]);
+                }
+            }
+
+            var out = [];
+            for (var ki = 0; ki < deduped.length; ki++) {
+                var mt = deduped[ki];
+                var sf = projectMasterToSource(chain, mt);
+                if (sf < 0)      sf = 0;
+                if (sf > srcDur) sf = srcDur;
+                out.push({ tMaster: mt, vSource: sf });
+            }
+            return out;
+        }
+
+        // Top-level: for one master layer, build the full shot plan.
+        // Returns null if no footage reached.
+        //
+        // The mainCompFrameRate is needed so the handle window can be
+        // derived in master timeline units (which controls how far
+        // chainKeys extend past the cut and where the dynamicLink
+        // wrapper extends to).  handleFrames is in MASTER frames per
+        // user setting, so we compute master-time handleSec from it.
+        function buildShotPlan(masterLayer, planHandleFrames, mainCompFrameRate, mainCompDur) {
+            var walked = walkChainToFootage(masterLayer);
+            if (!walked) return null;
+            var chain = walked.chain;
+            var footageLayer = chain[chain.length - 1];
+            var footage = footageLayer.source;
+            if (!footage) return null;
+            var srcDur = (typeof footage.duration === "number") ? footage.duration : 0;
+            if (srcDur <= 0) return null;
+            var srcFR = (typeof footage.frameRate === "number" && footage.frameRate > 0)
+                      ? footage.frameRate : 25;
+
+            // handleSec in MASTER timeline (used for chainKeys boundary
+            // extension and dynamicLink) is derived from mainComp's frame
+            // rate so handle frames mean what the user expects in the edit.
+            var hSecMaster = planHandleFrames / (mainCompFrameRate || srcFR);
+            // handleSec in SOURCE timeline (used for plate range padding)
+            // is derived from the footage's own frame rate.
+            var hSecSource = planHandleFrames / srcFR;
+
+            var visMin = walked.visibleRange.min;
+            var visMax = walked.visibleRange.max;
+            if (visMin < 0)      visMin = 0;
+            if (visMax > srcDur) visMax = srcDur;
+
+            var plateLo = Math.max(0,      visMin - hSecSource);
+            var plateHi = Math.min(srcDur, visMax + hSecSource);
+            // Snap to source-frame grid so the plate render starts on
+            // an integer source frame (avoids sub-frame drift in the
+            // render queue and downstream marker placement).
+            plateLo = Math.round(plateLo * srcFR) / srcFR;
+            plateHi = Math.round(plateHi * srcFR) / srcFR;
+            if (plateHi <= plateLo) plateHi = Math.min(srcDur, plateLo + 1.0 / srcFR);
+
+            var masterIn  = Math.min(masterLayer.inPoint, masterLayer.outPoint);
+            var masterOut = Math.max(masterLayer.inPoint, masterLayer.outPoint);
+
+            var chainKeys = collectShotChainKeys(
+                chain, masterIn, masterOut, hSecMaster, mainCompDur, srcDur
+            );
+
+            return {
+                masterLayer:    masterLayer,
+                masterIn:       masterIn,
+                masterOut:      masterOut,
+                masterCutDur:   masterOut - masterIn,
+                masterInExt:    Math.max(0, masterIn - hSecMaster),
+                masterOutExt:   Math.min(mainCompDur, masterOut + hSecMaster),
+                chain:          chain,
+                footageLayer:   footageLayer,
+                footage:        footage,
+                srcDur:         srcDur,
+                srcFR:          srcFR,
+                visibleRange:   { min: visMin, max: visMax },
+                plateRange:     { start: plateLo, end: plateHi, duration: plateHi - plateLo },
+                plateOffset:    plateLo,
+                handleSecMaster:hSecMaster,
+                handleSecSource:hSecSource,
+                chainKeys:      chainKeys,
+                directionAtLeaf:walked.directionAtLeaf
+            };
         }
 
         // --- NUKE SCRIPT WRITER ---
@@ -1760,76 +2062,6 @@ NOTES
         //   - Keys OUTSIDE the cut are gone.  They weren't visible
         //     anyway (the cut bounds the visible window) but they're
         //     no longer recoverable from this layer.
-        function pruneTimeRemapToCut(layer) {
-            if (!layer || !layer.timeRemapEnabled) return false;
-            var tr;
-            try { tr = layer.property("Time Remap"); } catch (eP) { return false; }
-            if (!tr) return false;
-
-            // Normalize cut bounds — negative-stretch layers report
-            // outPoint < inPoint.
-            var cutIn  = layer.inPoint;
-            var cutOut = layer.outPoint;
-            if (cutIn > cutOut) { var tmp = cutIn; cutIn = cutOut; cutOut = tmp; }
-            var cutDur = cutOut - cutIn;
-            if (cutDur <= 0) return false;
-
-            var EPS = 1e-3;   // ms-scale tolerance for boundary key matching
-
-            // Sample boundary values from the ORIGINAL curve before
-            // mutating any keys.  Eased segments need the surrounding
-            // keys intact for the sample to be accurate.
-            var srcAtCutIn  = 0;
-            var srcAtCutOut = 0;
-            try { srcAtCutIn  = tr.valueAtTime(cutIn,  false); } catch (eS1) {}
-            try { srcAtCutOut = tr.valueAtTime(cutOut, false); } catch (eS2) {}
-
-            // Detect existing boundary keys so we don't double-insert.
-            var hasCutInKey  = false;
-            var hasCutOutKey = false;
-            try {
-                for (var ki = 1; ki <= tr.numKeys; ki++) {
-                    var ktI = tr.keyTime(ki);
-                    if (Math.abs(ktI - cutIn)  < EPS) hasCutInKey  = true;
-                    if (Math.abs(ktI - cutOut) < EPS) hasCutOutKey = true;
-                }
-            } catch (eK) {}
-
-            // Insert boundary keys at cutIn / cutOut with sampled values.
-            if (!hasCutInKey)  { try { tr.setValueAtTime(cutIn,  srcAtCutIn);  } catch (eIK1) {} }
-            if (!hasCutOutKey) { try { tr.setValueAtTime(cutOut, srcAtCutOut); } catch (eIK2) {} }
-
-            // Force LINEAR on boundary keys.  For interior keys we leave
-            // the user's interpolation alone — that's what preserves the
-            // curve shape inside the cut.
-            try {
-                for (var kj = 1; kj <= tr.numKeys; kj++) {
-                    var ktJ = tr.keyTime(kj);
-                    if (Math.abs(ktJ - cutIn)  < EPS ||
-                        Math.abs(ktJ - cutOut) < EPS) {
-                        try {
-                            tr.setInterpolationTypeAtKey(kj,
-                                KeyframeInterpolationType.LINEAR,
-                                KeyframeInterpolationType.LINEAR);
-                        } catch (eL) {}
-                    }
-                }
-            } catch (eIM) {}
-
-            // Remove keys outside the cut.  Walk backwards so removeKey
-            // indices stay valid for the remaining keys.
-            try {
-                for (var kr = tr.numKeys; kr >= 1; kr--) {
-                    var ktR = 0;
-                    try { ktR = tr.keyTime(kr); } catch (eKT) { continue; }
-                    if (ktR < cutIn - EPS || ktR > cutOut + EPS) {
-                        try { tr.removeKey(kr); } catch (eRK) {}
-                    }
-                }
-            } catch (eRem) {}
-
-            return true;
-        }
 
         // Convert negative-stretch reversals to equivalent reversed time remaps.
         // A reversed time remap survives the roundtrip cleanly (mapTimeToSource
@@ -1846,166 +2078,11 @@ NOTES
         //
         // SYNC: helpers/reverse_stretch_to_remap.jsx has an identical copy of
         // this algorithm. Keep them in lockstep on bug fixes.
-        function convertStretchReversalToRemap(layer) {
-            try {
-                if (layer.timeRemapEnabled) return false;
-                if (!(layer.stretch < 0)) return false;
-                var srcDur = (layer.source && layer.source.duration) ? layer.source.duration : 0;
-                if (srcDur <= 0) return false;
-
-                // For negatively-stretched layers AE swaps the reported in/out:
-                //   inPoint  = comp-LATER  edge (source-earlier side)
-                //   outPoint = comp-EARLIER edge (source-later side)
-                // Normalize into comp-timeline order before sampling source times.
-                var startT   = layer.startTime;
-                var stretch  = layer.stretch;
-                var rawIn    = layer.inPoint;
-                var rawOut   = layer.outPoint;
-                var frameDur = layer.containingComp.frameDuration;
-
-                var compStart, compEnd;
-                if (rawIn <= rawOut) { compStart = rawIn;  compEnd = rawOut; }
-                else                 { compStart = rawOut; compEnd = rawIn;  }
-
-                // sourceTime(compTime) = (compTime - startTime) * (100 / stretch).
-                // For reversed layers AE anchors startTime one frame past the last
-                // rendered source frame, so subtract one frameDur to land on the
-                // source time that's actually on screen.
-                //
-                // Sample at the FIRST (compStart) and LAST (compEnd - frameDur)
-                // rendered comp frames — not the layer edges. outPoint is
-                // exclusive, so compEnd itself is never rendered; pairing srcAtEnd
-                // at compEnd with the (cutDur - frameDur) slope denominator below
-                // would mismatch by one frameDur and drift the end of playback.
-                var srcAtStart = (compStart            - startT) * (100 / stretch) - frameDur;
-                var srcAtEnd   = (compEnd  - frameDur  - startT) * (100 / stretch) - frameDur;
-
-                if (srcAtStart < 0)      srcAtStart = 0;
-                if (srcAtStart > srcDur) srcAtStart = srcDur;
-                if (srcAtEnd   < 0)      srcAtEnd   = 0;
-                if (srcAtEnd   > srcDur) srcAtEnd   = srcDur;
-
-                // Reset stretch to forward; anchor the layer back to the original
-                // comp range (AE may have relocated it).
-                layer.stretch   = 100;
-                layer.startTime = compStart;
-                layer.inPoint   = compStart;
-                layer.outPoint  = compEnd;
-
-                // Enable time remap. Select layer + property to dodge the "hidden
-                // property" error that setValueAtTime throws otherwise. Access the
-                // property via matchname.
-                layer.selected = true;
-                layer.timeRemapEnabled = true;
-                var tr = layer.property("ADBE Time Remapping");
-                tr.selected = true;
-
-                // Four keys all on the same line (the actual playback curve).
-                // Cut-boundary keys pin the cut range at the intended speed;
-                // the outer two extend into the handle range so AE doesn't
-                // extrapolate past the last key in *_dynamicLink wrappers or
-                // anywhere else the layer gets extended.
-                //
-                // Slope = (srcAtEnd - srcAtStart) / (cutDur - frameDur) — the
-                // actual stretch rate between the first and last rendered comp
-                // frames. Captures any negative-stretch magnitude (-100 → -1,
-                // -50 → -2, -200 → -0.5, -124 → ≈ -0.806).
-                //
-                // endKeyTime sits AT compEnd (on the cut_out marker) rather
-                // than at the last rendered frame. endKeyVal is extrapolated
-                // one frameDur past srcAtEnd along the slope, so the key sits
-                // on the marker while LINEAR interpolation between (compStart,
-                // srcAtStart) and (compEnd, endKeyVal) still hits srcAtEnd
-                // exactly at the last rendered frame (compEnd - frameDur).
-                // Don't lower-clamp endKeyVal: extrapolating past source edge
-                // is expected here (for full-clip reversal endKeyVal lands at
-                // about -frameDur) and clamping it to 0 would break the slope.
-                var endKeyTime = compEnd;
-                var cutDurLen  = compEnd - compStart;
-                var handleSec  = (layer.containingComp && layer.containingComp.frameRate)
-                               ? (handleFrames / layer.containingComp.frameRate)
-                               : 0;
-                var slope      = ((cutDurLen - frameDur) > 0)
-                               ? ((srcAtEnd - srcAtStart) / (cutDurLen - frameDur))
-                               : 0;
-                var preTime    = compStart - handleSec;
-                var postTime   = compEnd   + handleSec;
-                var preVal     = srcAtStart - slope * handleSec;
-                var endKeyVal  = srcAtEnd   + slope * frameDur;
-                var postVal    = srcAtEnd   + slope * (frameDur + handleSec);
-                if (preVal    < 0)      preVal    = 0;
-                if (preVal    > srcDur) preVal    = srcDur;
-                if (endKeyVal > srcDur) endKeyVal = srcDur;
-                if (postVal   > srcDur) postVal   = srcDur;
-
-                // Write our keys first, then prune AE's auto-keys — clearing
-                // them before writing can leave the property in an unusable state.
-                tr.setValueAtTime(preTime,    preVal);
-                tr.setValueAtTime(compStart,  srcAtStart);
-                tr.setValueAtTime(endKeyTime, endKeyVal);
-                tr.setValueAtTime(postTime,   postVal);
-
-                for (var k = tr.numKeys; k >= 1; k--) {
-                    var kt = tr.keyTime(k);
-                    if (Math.abs(kt - preTime)    > KEY_TIME_EPSILON_SEC &&
-                        Math.abs(kt - compStart)  > KEY_TIME_EPSILON_SEC &&
-                        Math.abs(kt - endKeyTime) > KEY_TIME_EPSILON_SEC &&
-                        Math.abs(kt - postTime)   > KEY_TIME_EPSILON_SEC) {
-                        tr.removeKey(k);
-                    }
-                }
-
-                // Force LINEAR interpolation on both keys. AE's default for a
-                // fresh setValueAtTime on time remap is BEZIER, which eases
-                // between keys — wrong for constant-speed reversed playback.
-                for (var ki = 1; ki <= tr.numKeys; ki++) {
-                    try {
-                        tr.setInterpolationTypeAtKey(ki, KeyframeInterpolationType.LINEAR, KeyframeInterpolationType.LINEAR);
-                    } catch (eInterp) {}
-                }
-
-                return true;
-            } catch (e) { return false; }
-        }
         // Recursive pruner — prunes complex remap keys to the cut
         // window for every scan-relevant layer in a comp tree.  Called
         // for nested precomps from applyTimeEffectConversions and for
         // any precomp encountered later that hasn't been pruned yet.
-        function pruneAllComplexRemapsInComp(comp) {
-            if (!comp || !(comp instanceof CompItem)) return 0;
-            var n = 0;
-            for (var li = 1; li <= comp.numLayers; li++) {
-                var l;
-                try { l = comp.layer(li); } catch (e) { continue; }
-                if (!l || !isScanRelevantLayer(l)) continue;
-                var fx;
-                try { fx = describeTimeEffect(l); } catch (e) { fx = null; }
-                if (fx && fx.remapKind &&
-                    (fx.remapKind === "complex-forward" ||
-                     fx.remapKind === "complex-reverse")) {
-                    if (pruneTimeRemapToCut(l)) n++;
-                }
-                try {
-                    if (l.source instanceof CompItem) {
-                        n += pruneAllComplexRemapsInComp(l.source);
-                    }
-                } catch (eRec) {}
-            }
-            return n;
-        }
 
-        function convertAllStretchReversalsInComp(comp) {
-            var n = 0;
-            for (var li = 1; li <= comp.numLayers; li++) {
-                var l = comp.layer(li);
-                if (!isScanRelevantLayer(l)) continue;
-                if (convertStretchReversalToRemap(l)) n++;
-                if (l.source instanceof CompItem) {
-                    n += convertAllStretchReversalsInComp(l.source);
-                }
-            }
-            return n;
-        }
 
 
         // Scan for reversals FIRST so the warning dialog comes up BEFORE any
@@ -2233,121 +2310,6 @@ NOTES
         // Mutates the DOM — only called AFTER the user commits on the
         // Confirm Shots preflight dialog. Returns the new selLayers, or
         // null on abort/failure (caller returns early).
-        function applyTimeEffectConversions() {
-            // Snapshot the mainComp selection — the converter flips layer/
-            // property selection flags to dodge the "hidden property" error,
-            // which collapses the user's original selection in the UI.
-            // Restore it after the loop.
-            var preConvertSelection = [];
-            for (var pcs = 0; pcs < mainComp.selectedLayers.length; pcs++) {
-                preConvertSelection.push(mainComp.selectedLayers[pcs]);
-            }
-            progress.update("Converting any reversed clips to time remaps\u2026", "0 of " + selLayers.length, 16);
-            for (var cri = 0; cri < selLayers.length; cri++) {
-                if (cancelCheck()) return null;
-                progress.update(null,
-                    "layer " + (cri + 1) + " of " + selLayers.length,
-                    16 + 2 * (cri / Math.max(1, selLayers.length)));
-                var crl = selLayers[cri].layer;
-                if (!isScanRelevantLayer(crl)) continue;
-                convertStretchReversalToRemap(crl);
-                if (crl.source instanceof CompItem) {
-                    convertAllStretchReversalsInComp(crl.source);
-                }
-            }
-            try {
-                for (var dse = 1; dse <= mainComp.numLayers; dse++) mainComp.layer(dse).selected = false;
-                for (var rse = 0; rse < preConvertSelection.length; rse++) {
-                    try { preConvertSelection[rse].selected = true; } catch(eSelRestore) {}
-                }
-            } catch(eSelSnap) {}
-
-            // Build trAffected AFTER the convert so inPoint/outPoint reflect
-            // the post-conversion forward-ordered values
-            // (convertStretchReversalToRemap swaps them into comp-timeline
-            // order when re-anchoring a reversed layer). autoPrecomposeTrimmed
-            // expects forward in/out.
-            var trAffected = [];
-            for (var ti = 0; ti < selLayers.length; ti++) {
-                var tl = selLayers[ti].layer;
-                var topFx = describeTimeEffect(tl);
-                if (topFx) {
-                    trAffected.push({ selIdx: ti, index: tl.index, name: tl.name, inPoint: tl.inPoint, outPoint: tl.outPoint,
-                        label: topFx.label, reversed: topFx.reversed });
-                }
-            }
-
-            // Prune complex remap keys to the cut window BEFORE
-            // autoPrecomposeTrimmed wraps these layers.  AE's precompose()
-            // and downstream replaceSource() both auto-extend a time-
-            // remapped layer's outPoint to encompass any keyframes past
-            // outPoint — which makes the cut span balloon to whatever
-            // timestamp the user's furthest key sits at.  Removing those
-            // out-of-cut keys here means AE has nothing to extend to.
-            // Skips layers that came out of convertStretchReversalToRemap
-            // (those need their preTime/postTime handle keys to render
-            // through the handle range).  Distinguish by remapKind:
-            // simple-* are auto-default 2-key shapes (incl. convert
-            // output); complex-* are user-built curves with extra keys.
-            for (var pti = 0; pti < trAffected.length; pti++) {
-                var ptl = selLayers[trAffected[pti].selIdx].layer;
-                var ptFx = describeTimeEffect(ptl);
-                if (ptFx && ptFx.remapKind &&
-                    (ptFx.remapKind === "complex-forward" ||
-                     ptFx.remapKind === "complex-reverse")) {
-                    pruneTimeRemapToCut(ptl);
-                }
-                // Also recurse into precomp source for nested complex
-                // remaps (e.g. precomp wrapper has no remap but its
-                // inner layer does).
-                try {
-                    if (ptl.source instanceof CompItem) {
-                        pruneAllComplexRemapsInComp(ptl.source);
-                    }
-                } catch (ePR) {}
-            }
-
-            if (trAffected.length > 0) {
-                progress.update("Auto-precomposing " + trAffected.length + " time-remapped layer(s)\u2026", "", 18);
-                if (!autoPrecomposeTrimmed(mainComp, trAffected)) {
-                    // autoPrecomposeTrimmed returns false on internal error OR
-                    // on cancel. Surface the cancel message if that's why we
-                    // stopped.
-                    if (cancelCheck()) return null;
-                    return null;
-                }
-
-                // Re-scan the selection — the precomposed layers replaced the
-                // originals. Apply the same filter as the initial scan:
-                // auto-precompose's selection restoration puts every pre-
-                // existing selection back on the layer panel, including
-                // shape/text/null/adjustment/guide layers the user happened
-                // to have selected alongside the real shots. Without this
-                // filter those come through as roundtrip candidates and
-                // crash downstream on null .source.
-                var newSel = [];
-                for (var ri = 1; ri <= mainComp.numLayers; ri++) {
-                    if (!mainComp.layer(ri).selected) continue;
-                    var rLayer = mainComp.layer(ri);
-                    if (!rLayer.hasVideo || rLayer.guideLayer || rLayer.adjustmentLayer || rLayer.nullLayer) continue;
-                    if (rLayer.source === null) { skippedLayers.push(rLayer.name + " (Shape/Text)"); continue; }
-                    var rIsFile = false;
-                    try { if (rLayer.source.mainSource && rLayer.source.mainSource.file) rIsFile = true; } catch(eRIS) {}
-                    var rIsPrecomp = (rLayer.source instanceof CompItem);
-                    if (rIsFile || rIsPrecomp) {
-                        newSel.push({ layer: rLayer, isPrecomp: rIsPrecomp, mainLayerIdx: rLayer.index });
-                    } else {
-                        skippedLayers.push(rLayer.name + " (Solid/Shape/Text)");
-                    }
-                }
-                if (newSel.length === 0) {
-                    alert("No layers selected after auto-precompose. Please select the precomposed layers and try again.");
-                    return null;
-                }
-                return newSel;
-            }
-            return selLayers;
-        }
 
         // Expand selected layers into shot entries (ORIGINAL, unconverted
         // state — the conversion + auto-precompose runs only after the
@@ -2877,129 +2839,24 @@ NOTES
         // mainComp top-level indices are stable across precompose (it
         // replaces in-place), so they survive the conversion + main
         // loop intact.
-        var bakeSources = [];
-        var bakeTopIdx  = {}; // { mainLayerIdx → true }
+        // Bake-pin map: { mainLayerIdx → true } for layers the user
+        // marked Bake in the reversed-clips warning.  Used by the bake
+        // render step below to decide which shots get an additional
+        // {shot}_reversed.mov variant rendered into their stack.  In
+        // the source-frame-first pipeline the bake is purely additive —
+        // the container's time-remap already encodes the cut's original
+        // motion (descending for stretch=-100, complex curves preserved
+        // exactly), so no bake-flip is needed and same-source layers in
+        // OTHER shots aren't affected.
+        var bakeTopIdx = {};
         if (revBakeLayers && revBakeLayers.length > 0) {
             for (var bli = 0; bli < revBakeLayers.length; bli++) {
-                var bl = revBakeLayers[bli].layer;
-                if (bl) {
-                    try {
-                        if (bl.source) bakeSources.push(bl.source);
-                    } catch (eBSC) {}
-                }
                 if (revBakeLayers[bli].topMainIdx != null) {
                     bakeTopIdx[revBakeLayers[bli].topMainIdx] = true;
                 }
             }
         }
 
-        // Now do the deferred DOM mutations: rewrite stretch→remap and
-        // auto-precompose time-remapped layers. Running these earlier
-        // (e.g. right after the reversal warning's Continue button) meant
-        // the project was already mutated if the user later cancelled on
-        // Confirm Shots. Deferring to here gives a clean rollback all the
-        // way up to the Process click.
-        //
-        // Snapshot per-shot overscan decisions before we rebuild expandedLayers
-        // so the user's toggles in the Confirm Shots dialog survive. Shot
-        // order and count are preserved across convert + auto-precompose
-        // (conversion is in-place; auto-precompose wraps each top-level
-        // time-remapped layer 1:1 into a container precomp), so index→shot
-        // mapping stays stable.
-        var overscanByIndex = [];
-        for (var osi = 0; osi < expandedLayers.length; osi++) {
-            overscanByIndex.push(!!expandedLayers[osi].overscan);
-        }
-
-        var postConvertSel = applyTimeEffectConversions();
-        if (postConvertSel === null) { progress.close(); return; }
-        selLayers = postConvertSel;
-
-        // Flip baked layers' time-remap from descending to ascending in
-        // mainComp.
-        //
-        // applyTimeEffectConversions just rewrote any negative-stretch
-        // reversals into descending time-remap keys so the rest of the
-        // pipeline can handle them. For layers the user marked Bake the
-        // reversal is captured in the separate `_reversed.mov` rendered
-        // into _stack later — having mainComp ALSO play the source
-        // backward via remap would double-direction the edit. So for
-        // each baked layer we keep the keys and their times intact (so
-        // the cut + handle structure is preserved) but mirror the VALUES
-        // across the cut centre, which turns descending into ascending →
-        // forward playback over the same source range.
-        if (bakeSources && bakeSources.length > 0) {
-            (function reverseBakedLayersInTree(comp, visited) {
-                if (!comp || !(comp instanceof CompItem)) return;
-                visited = visited || {};
-                var ck = "c" + (comp.id || comp.name);
-                if (visited[ck]) return;
-                visited[ck] = true;
-                for (var li = 1; li <= comp.numLayers; li++) {
-                    var L;
-                    try { L = comp.layer(li); } catch (eL1) { continue; }
-                    if (!L) continue;
-                    try {
-                        var srcMatch = false;
-                        for (var bsi = 0; bsi < bakeSources.length; bsi++) {
-                            if (L.source === bakeSources[bsi]) { srcMatch = true; break; }
-                        }
-                        if (srcMatch && L.timeRemapEnabled) {
-                            var tr = L.property("Time Remap");
-                            var nKeys = tr.numKeys;
-                            if (nKeys >= 2) {
-                                // Vertical mirror: new_value = srcDur - old_value.
-                                // Preserves curve shape (hold frames, eased
-                                // segments) — just flips on the value axis.
-                                // The previous "positional" mirror swapped
-                                // values across keys (vals[nKeys-w]); that
-                                // works for the simple 2-key default but
-                                // corrupts complex curves by migrating holds
-                                // / eased segments to wrong key positions,
-                                // producing black or out-of-range remap output.
-                                //
-                                // Both schemes give the same result for
-                                // simple 2-key descending (srcDur, 0) — both
-                                // yield (0, srcDur) — so the simple-reverse
-                                // case is unchanged.
-                                var lSrcDur = (L.source && L.source.duration) ? L.source.duration : 0;
-                                if (lSrcDur > 0) {
-                                    for (var w = 1; w <= nKeys; w++) {
-                                        try {
-                                            var newV = lSrcDur - tr.keyValue(w);
-                                            if (newV < 0)        newV = 0;
-                                            if (newV > lSrcDur)  newV = lSrcDur;
-                                            tr.setValueAtKey(w, newV);
-                                        } catch (eSV) {}
-                                    }
-                                }
-                                // Don't force linear: that flattens user's
-                                // eased segments and changes the curve
-                                // shape.  Simple 2-key default is already
-                                // linear, so no change needed there.
-                                // Complex curves keep their easing handles.
-                            }
-                        }
-                        if (L.source instanceof CompItem) {
-                            reverseBakedLayersInTree(L.source, visited);
-                        }
-                    } catch (eL2) {}
-                }
-            })(mainComp);
-        }
-
-        // Rebuild expandedLayers from the post-conversion selection. The
-        // inner references (found.footageLayer, found.footageComp) on the
-        // old expandedLayers are fine for precomp selections, but a top-
-        // level direct-footage layer that got wrapped by autoPrecomposeTrimmed
-        // now has a different mainComp layer reference — the fresh walk
-        // picks up the new container layer correctly.
-        progress.update("Re-expanding selection after conversion\u2026", "0 of " + selLayers.length, 20);
-        expandedLayers = buildExpandedLayers(selLayers, skippedLayers, 20, 2, true);
-        if (expandedLayers === null) return;
-        for (var osj = 0; osj < expandedLayers.length; osj++) {
-            expandedLayers[osj].overscan = (osj < overscanByIndex.length) ? overscanByIndex[osj] : false;
-        }
 
         // Cross-selection shared-source handling. Three modes from the
         // dedicated shared-source preflight dialog (only shown when
@@ -3167,30 +3024,23 @@ NOTES
                 );
                 var osSuffix   = (item.overscan && overscanPercent > 0) ? "_OS" : "";
 
-                // ── Resolve source, range, and footage location ────────────────
-                var source, range, footageLayer, footageComp;
-                if (isPrecomp) {
-                    // item.found was pre-computed during layer expansion
-                    source       = item.found.footageLayer.source;
-                    range        = { start: item.found.rangeStart, end: item.found.rangeEnd };
-                    footageLayer = item.found.footageLayer;
-                    footageComp  = item.found.footageComp;
-                    // Cross-selection sharing: the pre-pass above duplicated
-                    // chains (separate / single modes) and/or marked
-                    // entries with `.shareSkip` (shared mode — collapse
-                    // into one shotComp covering the union) or
-                    // `.singleSkip` (single mode — only first reference
-                    // becomes a shot, others stay untouched). Skip both
-                    // skip flags here.
-                    if (item.shareSkip || item.singleSkip) continue;
-                } else {
-                    source = layer.source;
-                    range  = getRequiredSourceRange(layer);
-                    // No dedup for direct-footage selections: if the user picked the layer,
-                    // they want their own shot for it — even if the same source happens to
-                    // live inside a previously-processed precomp. Dedup is strictly a
-                    // precomp→precomp concern (see the isPrecomp branch above).
+                // Cross-selection sharing skip flags (set by the shared-source
+                // preflight pre-pass) — handled before any plan work.
+                if (item.shareSkip || item.singleSkip) continue;
+
+                // ── Build shot plan (chain walk + plate range + chain keys) ────
+                // Read-only walk to the deepest footage; produces every value
+                // the rest of the per-shot block needs.  No mutations until we
+                // start creating the shotComp / wrapping below.
+                var plan = buildShotPlan(layer, handleFrames, mainComp.frameRate, mainComp.duration);
+                if (!plan) {
+                    skippedLayers.push((layer && layer.name ? layer.name : "?") + " (no footage reached — disabled / guide / missing source?)");
+                    continue;
                 }
+                var source       = plan.footage;
+                var footageLayer = plan.footageLayer;
+                var range        = { start: plan.visibleRange.min, end: plan.visibleRange.max };
+                var footageComp  = (plan.footageLayer && plan.footageLayer.containingComp) ? plan.footageLayer.containingComp : null;
 
                 // Skip if shot comp already exists in project
                 if (existingCompNames[shotName + "_comp"] || existingCompNames[shotName + "_comp_OS"]) { skippedLayers.push(shotName + " (already processed — skipped)"); continue; }
@@ -3227,52 +3077,29 @@ NOTES
                 plateInner.startTime = 0;
                 plateInner.position.setValue([osWidth / 2, osHeight / 2]);
 
-                var handleSec = handleFrames / shotComp.frameRate;
+                // Plate range / cut bounds come from the shot plan in source-
+                // frame domain.  buildShotPlan already clamped to [0, srcDur]
+                // and snapped to source-frame grid, so we just unpack the
+                // values here.
+                var handleSec          = plan.handleSecSource;
+                var fullStart          = plan.plateRange.start;
+                var fullDurationSec    = plan.plateRange.duration;
+                var snappedStartFrame  = Math.round(fullStart * safeFPS);
+                var fullDurationFrames = Math.round(fullDurationSec * safeFPS);
+                var snappedEndFrame    = snappedStartFrame + fullDurationFrames;
 
-                // Clamp to source duration (not shotComp.duration, which has the buffer frame).
-                // Both bounds are guarded — downstream shotComp.workAreaStart/Duration must stay
-                // inside the comp, and upstream mapTimeToSource can return values outside [0, srcDur]
-                // for nested time effects (reversed remaps, layers with startTime offset, etc.).
-                var rawStart = range.start - handleSec;
-                if (rawStart < 0) rawStart = 0;
-                if (rawStart > safeDuration) rawStart = safeDuration;
-                var rawEnd = range.end + handleSec;
-                if (rawEnd < 0) rawEnd = 0;
-                if (rawEnd > safeDuration) rawEnd = safeDuration;
-                if ((rawEnd - rawStart) < 0.04) rawEnd = Math.min(rawStart + 0.04, safeDuration);
-                if (rawEnd < rawStart) { var _swp = rawStart; rawStart = rawEnd; rawEnd = _swp; }
+                var cutStart    = plan.visibleRange.min;
+                var cutDuration = plan.visibleRange.max - plan.visibleRange.min;
 
-                var snappedStartFrame  = Math.round(rawStart * safeFPS);
-                var fullStart          = snappedStartFrame / safeFPS;
-                var snappedEndFrame    = Math.round(rawEnd  * safeFPS);
-                var fullDurationFrames = snappedEndFrame - snappedStartFrame;
-                var fullDurationSec    = fullDurationFrames / safeFPS;
-
-                var cutStartFrame         = Math.round(range.start * safeFPS);
-                var actualLeadingHandles  = cutStartFrame - snappedStartFrame;
-                var actualTrailingHandles = snappedEndFrame - Math.round(range.end * safeFPS);
+                var actualLeadingHandles  = Math.round((cutStart - fullStart) * safeFPS);
+                var actualTrailingHandles = Math.round(((fullStart + fullDurationSec) - (cutStart + cutDuration)) * safeFPS);
                 if (actualLeadingHandles < handleFrames || actualTrailingHandles < handleFrames) {
-                    clampedShots.push(shotName + "  (head: " + actualLeadingHandles + "f  tail: " + actualTrailingHandles + "f  /  requested: " + handleFrames + "f, black padding added)");
+                    clampedShots.push(shotName + "  (head: " + actualLeadingHandles + "f  tail: " + actualTrailingHandles + "f  /  requested: " + handleFrames + "f, source clamped near edge)");
                 }
 
-                var cutStart    = fullStart + handleSec;
-                if (fullStart === 0 && (range.start - handleSec < 0)) cutStart = range.start;
-                var cutDuration = range.end - range.start;
-                if (cutStart + cutDuration > safeDuration) cutDuration = safeDuration - cutStart;
-                // Defensive: cutStart > safeDuration (clamped rawStart against a
-                // very short source) makes the line above negative, which then
-                // places the "cut out" marker BEFORE "cut in". Clamp to zero so
-                // the markers collapse to the same instant instead of crossing.
-                if (cutDuration < 0) cutDuration = 0;
-
-                // AE's workAreaDuration setter requires >= one frame.  When the
-                // layer has a complex / hold-frame time remap the source range
-                // can collapse to zero (or sub-frame), which crashes the
-                // setter with a "Value out of range" error.  Clamp to one
-                // frame, then back off cutStart if needed to stay inside
-                // safeDuration.  Markers still land at the original cut
-                // boundaries; only the work-area highlight nudges to a
-                // single visible frame.
+                // AE's workAreaDuration setter requires >= one frame.  Clamp
+                // a degenerate (sub-frame) cut to one frame so the setter
+                // doesn't throw.
                 var minWADur = 1.0 / safeFPS;
                 if (cutDuration < minWADur) cutDuration = minWADur;
                 if (cutStart + cutDuration > safeDuration) {
@@ -3280,604 +3107,215 @@ NOTES
                     if (cutStart + cutDuration > safeDuration) cutDuration = safeDuration - cutStart;
                 }
 
-                // Work area = EDITORIAL CUT only (not cut+handles) so RAM
-                // preview and UI focus land on the visible cut. The render
-                // queue uses explicit timeSpanStart/Duration below, so the
-                // render range still covers cut+handles independently.
+                // Work area = EDITORIAL CUT in source-frame domain (matches
+                // shotComp.frame === source.frame identity).  The render
+                // queue uses fullStart/fullDurationSec independently below.
                 shotComp.workAreaStart    = cutStart;
                 shotComp.workAreaDuration = cutDuration;
                 shotComp.markerProperty.setValueAtTime(cutStart, cutMarker("cut in"));
                 shotComp.markerProperty.setValueAtTime(cutStart + cutDuration, cutMarker("cut out"));
 
-                // ── Path-specific: precomp vs. direct footage ──────────────────
-                var containerDurFrames;
-                if (isPrecomp) {
+                // ── Wrap master layer in {shot}_container, master timeline ─────
+                // Single uniform path for every shot regardless of whether
+                // the master layer was direct footage, a precomp, a stretch=
+                // -100 reversal, or a complex time-remap.  Native precompose
+                // with moveAllAttributes=true preserves effects, masks,
+                // transforms, expressions, layer flags, and file bindings
+                // (Apply Color LUT etc.).  The container's time-remap is
+                // written from buildShotPlan's chainKeys — every (master
+                // timeline t, footage source frame) pair sampled along the
+                // chain — so the cut's curve shape is preserved exactly
+                // without any conversion / pruning / bake-flip dance.
+                var origInPoint   = layer.inPoint;
+                var origOutPoint  = layer.outPoint;
+                var origLayerLabel = 0;
+                try { origLayerLabel = layer.label; } catch (eLbl0) {}
+                var layerIdx     = layer.index;
 
-                    // If the topmost precomp layer has a time remap or speed stretch,
-                    // auto-precompose it into a neutral wrapper so _dynamicLink is frame-accurate.
-                    // startTime is intentionally excluded: a non-zero startTime is normal layer
-                    // positioning and is handled correctly by mapTimeToSource without wrapping.
-                    var needsWrap = layer.timeRemapEnabled ||
-                                    Math.abs(layer.stretch - 100) > 0.01;
-                    if (needsWrap) {
-                        // Capture original timing AND label colour before
-                        // precompose invalidates the ref — AE's native
-                        // precompose does not reliably preserve in/out OR
-                        // the layer's label on the new mainComp wrapper,
-                        // so we restore them ourselves.
-                        var origInPointPC  = layer.inPoint;
-                        var origOutPointPC = layer.outPoint;
-                        var origLabelPC    = 0;
-                        try { origLabelPC = layer.label; } catch (eLblPC0) {}
-                        var layerIdx = layer.index; // read before precompose invalidates the ref
-                        try { mainComp.layers.precompose([layerIdx], shotName + "_container" + osSuffix, true); } catch(ePC) {}
-                        // Always re-fetch outside the try — whether precompose succeeded or failed,
-                        // mainComp.layer(idx) is valid: it's the wrapper on success, the original on failure.
-                        layer = mainComp.layer(layerIdx);
-                        // Restore original in/out + label so the edit's cut
-                        // placement and colour-coding survives.
-                        try {
-                            layer.startTime = 0;
-                            layer.inPoint   = origInPointPC;
-                            layer.outPoint  = origOutPointPC;
-                        } catch (eTimingPC) {}
+                var containerComp;
+                try {
+                    containerComp = mainComp.layers.precompose([layerIdx], shotName + "_container" + osSuffix, true);
+                } catch (ePC) {
+                    reportError("PREP", ePC, "Container precompose failed for " + shotName);
+                    continue;
+                }
+                containerComp.displayStartTime = 0;
+                containerComp.parentFolder     = shotBin;
+                containerComp.label            = 8; // Blue — container
 
-                        // Trim the WRAPPED inner layer's outPoint back to the
-                        // cut span.  AE's precompose() will silently extend
-                        // the inner layer's outPoint to include the last
-                        // time-remap key — fine for default 2-key remaps,
-                        // catastrophic for complex / partially-reversed
-                        // curves where the last key may sit tens of seconds
-                        // past the cut end.  Symptom: shot_xxx_comp ends up
-                        // 33 s long when the cut is 1.28 s, which throws the
-                        // bake render and every downstream marker / handle
-                        // calculation off.  Force the inner to the cut span;
-                        // keys past outPoint stay on the property but no
-                        // longer drive playback.
-                        try {
-                            var innerHostComp = layer.source;
-                            if (innerHostComp && innerHostComp instanceof CompItem &&
-                                innerHostComp.numLayers >= 1) {
-                                var innerCutLayer = innerHostComp.layer(1);
-                                var innerCutDur   = origOutPointPC - origInPointPC;
-                                if (innerCutDur > 0) {
-                                    innerCutLayer.outPoint = innerCutLayer.inPoint + innerCutDur;
-                                }
-                            }
-                        } catch (eTrimInner) {}
-                        try { layer.label = origLabelPC; } catch (eLblPC1) {}
-                        // Single-shot precomp → shot bin. Multi-footage container's
-                        // per-range bin is handled by the rename block below.
-                        if (item.totalInPrecomp === 1) {
-                            try { layer.source.parentFolder = shotBin; } catch(ePF) {}
-                        }
-                        // Patch remaining entries that share the same original layer index.
-                        // We compare mainLayerIdx (an integer saved before any processing) instead of
-                        // comparing AE layer object references — ExtendScript throws "Object is invalid"
-                        // when the invalidated DOM object is evaluated even in a === comparison.
-                        for (var upd = i + 1; upd < expandedLayers.length; upd++) {
-                            if (expandedLayers[upd].mainLayerIdx === layerIdx) {
-                                expandedLayers[upd].layer = layer;
-                            }
-                        }
-                        // Same patch for selLayers so the dynamicLink build loop
-                        // later doesn't iterate stale refs ("Object is invalid").
-                        for (var sUpdP = 0; sUpdP < selLayers.length; sUpdP++) {
-                            if (selLayers[sUpdP].mainLayerIdx === layerIdx) {
-                                selLayers[sUpdP].layer = layer;
-                            }
-                        }
-                    } else {
-                        // No timing offsets — rename and move the precomp for consistency
-                        // (single-footage only — multi-footage is handled by the range-bin
-                        //  block below so we don't overwrite the name on intermediate passes)
-                        if (item.totalInPrecomp === 1) {
-                            try { layer.source.name = shotName + "_container" + osSuffix; } catch(eRn) {}
-                            try { layer.source.parentFolder = shotBin; } catch(ePF2) {}
-                        }
-                    }
+                // Container shares mainComp's timeline (wrapper.startTime=0
+                // below makes containerComp.t === mainComp.t).  Cut markers
+                // and the inner layer's visibility window are therefore in
+                // master timeline.
+                try {
+                    containerComp.duration         = mainComp.duration;
+                    containerComp.workAreaStart    = plan.masterIn;
+                    containerComp.workAreaDuration = plan.masterCutDur;
+                } catch (eDur) {}
+                containerComp.markerProperty.setValueAtTime(plan.masterIn,  cutMarker("cut in"));
+                containerComp.markerProperty.setValueAtTime(plan.masterOut, cutMarker("cut out"));
 
-                    // Multi-footage precomps get their own range bin "/Shots/shot_FIRST_LAST/"
-                    // and the container source lives inside it. Runs on every matching entry
-                    // so the range (and bin name) grows as we encounter later footage — the
-                    // last write wins, which after the loop gives "shot_FIRST_LAST_container"
-                    // in "/Shots/shot_FIRST_LAST/".
-                    if (item.totalInPrecomp > 1) {
-                        var lIdx = item.mainLayerIdx;
-                        if (!precompLayerRegistry[lIdx]) {
-                            precompLayerRegistry[lIdx] = shotName; // store first shot name
-                        }
-                        var rangeBinName = precompLayerRegistry[lIdx] + "_" + pad(currentNum, 3);
-                        if (!precompRangeBinRegistry[lIdx]) {
-                            precompRangeBinRegistry[lIdx] = getShotBin(binShots, rangeBinName);
-                        } else {
-                            try { precompRangeBinRegistry[lIdx].name = rangeBinName; } catch(eBin) {}
-                        }
-                        try {
-                            var srcItem = mainComp.layer(lIdx).source;
-                            srcItem.name         = rangeBinName + "_container" + osSuffix;
-                            srcItem.parentFolder = precompRangeBinRegistry[lIdx];
-                        } catch(eRn2) {}
-                    }
+                // plateInner markers — cut_in/out in shotComp's source-frame
+                // domain so external tools (Nuke, Resolve, dynamicLink) see
+                // them at the right footage frames.
+                plateInner.property("Marker").setValueAtTime(cutStart,               cutMarker("cut in"));
+                plateInner.property("Marker").setValueAtTime(cutStart + cutDuration, cutMarker("cut out"));
 
-                    // Intermediate precomp rename: every wrapper precomp BETWEEN
-                    // the outer selection's source and the raw footage would
-                    // otherwise keep its original auto-generated name
-                    // ("C2456.mov Comp 1") with no indication of which shot
-                    // lives there. Walk the chain from innermost to outermost
-                    // and rename each layer along the way.
-                    //
-                    // Naming convention (suffix reflects distance from the
-                    // footage, so names read intuitively top-down):
-                    //   depth 0 (immediate parent of footage): _inner
-                    //   depth 1 (one level up):                _inner2
-                    //   depth 2:                               _inner3
-                    //   …
-                    //
-                    // Registry is keyed per wrapper-comp id using the same
-                    // last-write-wins range pattern as the outer range bin:
-                    // if the same wrapper hosts multiple shots it ends up as
-                    // "shot_030_050_inner" rather than flip-flopping per shot.
-                    //
-                    // Never touches the outer container (it has its own naming
-                    // via precompLayerRegistry + the "_container" suffix).
+                // Inside containerComp: the wrapped master layer becomes
+                // containerInner.  precompose places it at layer(1) when
+                // the master was a single layer; fall back to scanning if
+                // anything shifted.
+                var containerInner = null;
+                for (var ci = 1; ci <= containerComp.numLayers; ci++) {
+                    var cl;
+                    try { cl = containerComp.layer(ci); } catch (eCL) { continue; }
+                    if (!cl) continue;
+                    try { if (cl.source === source || cl.name === layer.name) { containerInner = cl; break; } } catch (eCS) {}
+                }
+                if (!containerInner && containerComp.numLayers >= 1) containerInner = containerComp.layer(1);
+
+                if (containerInner) {
+                    containerInner.replaceSource(shotComp, false);
+
+                    // Effect transplant — copy effects from every chain
+                    // layer BETWEEN the master (chain[0], whose effects
+                    // are already on containerInner via precompose's
+                    // moveAllAttributes) and the deepest footage onto
+                    // containerInner.  Without this, effects the user
+                    // applied to e.g. {shot}_comp (the layer one level
+                    // inside the original {shot}_container) are stranded
+                    // on the orphaned old layer once replaceSource swaps
+                    // the chain out.
                     try {
-                        var iChain = (item.found && item.found.layerChain) ? item.found.layerChain : [];
-                        var iFComp = item.found && item.found.footageComp;
-                        if (iFComp && iFComp !== item.layer.source) {
-                            // Build wrapperComps innermost-to-outermost.
-                            // footageComp is the innermost wrapper (depth 0).
-                            // Chain is outer-to-inner, so its last entry's
-                            // source === footageComp; step back to grab the
-                            // outer wrappers.
-                            var wrapperComps = [iFComp];
-                            for (var wi = iChain.length - 2; wi >= 0; wi--) {
-                                try { wrapperComps.push(iChain[wi].source); } catch(eWS) {}
-                            }
-                            for (var wci = 0; wci < wrapperComps.length; wci++) {
-                                var wComp = wrapperComps[wci];
-                                if (!wComp) continue;
-                                // Skip shared comps: if this wrapper is referenced
-                                // from anywhere outside the chain we just walked
-                                // (e.g. another layer in mainComp also uses it,
-                                // or it lives in another precomp the user keeps),
-                                // renaming would surprise them by retitling user-
-                                // meaningful work as a shot artifact. Pure throw-
-                                // away wrappers like AE-auto "X.mov Comp 1" have
-                                // usedIn.length === 1 (only their immediate parent
-                                // in this chain) and still get renamed.
-                                var wUsedCount = 1;
-                                try { wUsedCount = wComp.usedIn.length; } catch(eUI) {}
-                                if (wUsedCount > 1) continue;
-                                var wcId;
-                                try { wcId = wComp.id; } catch(eWcId) { continue; }
-                                if (!intermedCompRegistry[wcId]) {
-                                    intermedCompRegistry[wcId] = {
-                                        firstNum:      currentNum,
-                                        firstShotName: shotName,
-                                        lastNum:       currentNum
-                                    };
-                                } else {
-                                    intermedCompRegistry[wcId].lastNum = currentNum;
-                                }
-                                var wReg = intermedCompRegistry[wcId];
-                                var suffix = (wci === 0) ? "_inner" : ("_inner" + (wci + 1));
-                                var icName = (wReg.firstNum === wReg.lastNum)
-                                           ? wReg.firstShotName + suffix
-                                           : wReg.firstShotName + "_" + pad(wReg.lastNum, 3) + suffix;
-                                try { wComp.name = icName + osSuffix; } catch(eIR) {}
-                                // File into the shot's bin so it doesn't float
-                                // at the project root. Single-shot wrappers go
-                                // under /Shots/{shot}/; multi-shot range wrappers
-                                // under /Shots/{shot}_{lastNum}/.
-                                try {
-                                    var icBinName = (wReg.firstNum === wReg.lastNum)
-                                                  ? wReg.firstShotName
-                                                  : wReg.firstShotName + "_" + pad(wReg.lastNum, 3);
-                                    var icBin = getShotBin(binShots, icBinName);
-                                    if (icBin) wComp.parentFolder = icBin;
-                                } catch(eICBin) {}
-                            }
+                        for (var ce = 1; ce < plan.chain.length; ce++) {
+                            try { copyLayerEffects(plan.chain[ce], containerInner); } catch (eCEPL) {}
                         }
-                    } catch(eIRB) {}
+                    } catch (eCEFX) {}
 
-                    // No container comp. Mark source as processed, replace footage layer
-                    // inside the deepest precomp with shotComp. All transforms/effects on
-                    // footageLayer are preserved in place — nothing to transplant.
-                    // Key on the ORIGINAL source id (pre-replaceSource) so later iterations
-                    // can still detect the dupe after this replacement mutates the live source.
-                    // Record mainLayerIdx so the dedup check above can distinguish
-                    // within-selection repeats (allowed → N shots) from cross-
-                    // selection sharing (deduped → 1 shot). Only write on first
-                    // occurrence so mainLayerIdx isn't clobbered by later same-
-                    // selection iterations.
-                    if (item.originalSourceId && !processedSourceIds[item.originalSourceId]) {
-                        processedSourceIds[item.originalSourceId] = { mainLayerIdx: item.mainLayerIdx, bin: shotBin };
-                    }
-
-                    plateInner.property("Marker").setValueAtTime(cutStart, cutMarker("cut in"));
-                    plateInner.property("Marker").setValueAtTime(cutStart + cutDuration, cutMarker("cut out"));
-
-                    // Snapshot the footage layer's CURRENT in/out (and the
-                    // pre-replaceSource flag for whether time-remap was on)
-                    // before the replaceSource below.  AE silently re-extends
-                    // a time-remapped layer's outPoint when its source is
-                    // swapped, clipping to the new source / containing comp
-                    // duration.  Without this snapshot, the post-replace
-                    // logic at "Trim the footageLayer" reads the corrupted
-                    // values and re-applies them, which makes the inner
-                    // layer span the entire container instead of the cut.
-                    var preReplaceInP   = 0, preReplaceOutP = 0;
-                    var preReplaceTREnb = false;
-                    var preReplaceStr   = 100;
-                    try { preReplaceInP   = footageLayer.inPoint;          } catch (e) {}
-                    try { preReplaceOutP  = footageLayer.outPoint;         } catch (e) {}
-                    try { preReplaceTREnb = footageLayer.timeRemapEnabled; } catch (e) {}
-                    try { preReplaceStr   = footageLayer.stretch;          } catch (e) {}
-
-                    // Defensive prune: if the layer has a complex remap
-                    // that wasn't already pruned upstream (e.g. it lives
-                    // in a precomp that wasn't in trAffected), trim its
-                    // out-of-cut keys before replaceSource.  AE's auto-
-                    // extension during replaceSource only fires when
-                    // there are keys past outPoint.
+                    // Reset every property AE may have inherited from the
+                    // original layer — stretch could be -100, time-remap
+                    // may already be enabled with stale keys, in/out could
+                    // be negative-duration (reversed-stretch convention).
+                    // We want a clean forward-time layer with our chain
+                    // keys as the only time effect.
                     try {
-                        var prFx = describeTimeEffect(footageLayer);
-                        if (prFx && prFx.remapKind &&
-                            (prFx.remapKind === "complex-forward" ||
-                             prFx.remapKind === "complex-reverse")) {
-                            pruneTimeRemapToCut(footageLayer);
-                        }
-                    } catch (ePD) {}
+                        if (containerInner.timeRemapEnabled) containerInner.timeRemapEnabled = false;
+                    } catch (eDis) {}
+                    try { containerInner.stretch   = 100; } catch (eStr) {}
+                    try { containerInner.startTime = 0;   } catch (eST) {}
 
-                    footageLayer.replaceSource(shotComp, false);
+                    // Visible window on the inner layer: span the master
+                    // cut + handles so dynamicLink (which extends wrapper.
+                    // in/out by handleSec) finds content during the handle
+                    // frames.  buildShotPlan clamped masterInExt /
+                    // masterOutExt to mainComp duration already.
+                    try {
+                        containerInner.inPoint  = plan.masterInExt;
+                        containerInner.outPoint = plan.masterOutExt;
+                    } catch (eIO) {}
 
-                    // AE's replaceSource on a time-remapped layer auto-inserts
-                    // boundary keys at startTime (v=0) and startTime+srcDur
-                    // (v=srcDur) to make the timeRemap span the new source —
-                    // even if Path C pruned them upstream.  Those auto-keys
-                    // sit OUTSIDE the cut, so AE then auto-extends layer.
-                    // outPoint to the last (auto-added) key, ballooning the
-                    // cut span back out.  Strip them in PRE-replaceSource
-                    // cut bounds before we touch inPoint/outPoint, so the
-                    // subsequent `outPoint = flCutOut` assignment has no
-                    // out-of-cut keys to extend toward.
-                    if (preReplaceTREnb) {
-                        var prCutIn  = preReplaceInP;
-                        var prCutOut = preReplaceOutP;
-                        if (prCutIn > prCutOut) { var prTmp = prCutIn; prCutIn = prCutOut; prCutOut = prTmp; }
-                        try {
-                            var prTr = footageLayer.property("Time Remap");
-                            if (prTr) {
-                                var prEPS = 1e-3;
-                                for (var prk = prTr.numKeys; prk >= 1; prk--) {
-                                    var prkt;
-                                    try { prkt = prTr.keyTime(prk); } catch (eprkt) { continue; }
-                                    if (prkt < prCutIn - prEPS || prkt > prCutOut + prEPS) {
-                                        try { prTr.removeKey(prk); } catch (eprrk) {}
-                                    }
-                                }
-                                // Dedupe AE-auto boundary keys: AE inserts a key at
-                                // exact layer.startTime with v = 0 (or v = srcDur for
-                                // descending) to span the new source.  Floating-point
-                                // drift between layer.startTime and our cutIn means
-                                // the auto-key sits ALONGSIDE the user/convert key
-                                // instead of overwriting it — yielding two keys 0.0001s
-                                // apart with wildly different values, which AE
-                                // interprets as a near-instantaneous jump (huge ease
-                                // slope).  At each cut boundary, when 2+ keys cluster
-                                // within EPS, remove whichever sits closer to the AE-
-                                // auto shape (value ≈ 0 or value ≈ source.duration —
-                                // checking BOTH the layer's current source and the
-                                // pre-replaceSource source, since AE may have used
-                                // the old duration when inserting).
-                                var srcDurNew = (footageLayer.source && footageLayer.source.duration) ? footageLayer.source.duration : 0;
-                                var srcDurOld = (source && source.duration) ? source.duration : 0;
-                                var prVTOL    = 0.5; // half-second value tolerance — AE-auto values are within a frame of 0/srcDur
-                                var _autoness = function (v) {
-                                    var d0   = Math.abs(v);
-                                    var dNew = (srcDurNew > 0) ? Math.abs(v - srcDurNew) : Infinity;
-                                    var dOld = (srcDurOld > 0) ? Math.abs(v - srcDurOld) : Infinity;
-                                    return Math.min(d0, dNew, dOld);
-                                };
-                                var _dedupeAt = function (t) {
-                                    var hits = [];
-                                    for (var hi = 1; hi <= prTr.numKeys; hi++) {
-                                        var ht;
-                                        try { ht = prTr.keyTime(hi); } catch (eHt) { continue; }
-                                        if (Math.abs(ht - t) < prEPS) hits.push(hi);
-                                    }
-                                    if (hits.length < 2) return;
-                                    var worstIdx = -1, worstScore = Infinity;
-                                    for (var di = 0; di < hits.length; di++) {
-                                        var dv;
-                                        try { dv = prTr.keyValue(hits[di]); } catch (eDv) { continue; }
-                                        var score = _autoness(dv);
-                                        if (score < worstScore) { worstScore = score; worstIdx = hits[di]; }
-                                    }
-                                    if (worstIdx > 0 && worstScore < prVTOL) {
-                                        try { prTr.removeKey(worstIdx); } catch (eRD) {}
-                                    }
-                                };
-                                _dedupeAt(prCutIn);
-                                _dedupeAt(prCutOut);
+                    // Time-remap: keys at master timeline times, values in
+                    // source-frame domain (= shotComp.frame).  buildShotPlan
+                    // already sampled every keyframe along the chain and
+                    // clamped values to [0, srcDur] so AE never has to
+                    // extrapolate or display black during handle frames.
+                    try { containerInner.timeRemapEnabled = true; } catch (eEN) {}
+                    try {
+                        var ciTr = containerInner.property("Time Remap");
+                        if (ciTr && plan.chainKeys.length >= 2) {
+                            // Write our keys (overwrites at exact times,
+                            // adds at new times).
+                            for (var ck = 0; ck < plan.chainKeys.length; ck++) {
+                                try { ciTr.setValueAtTime(plan.chainKeys[ck].tMaster, plan.chainKeys[ck].vSource); } catch (eSK) {}
                             }
-                        } catch (ePostPrune) {}
-                    }
+                            // Strip any keys that aren't in our chain set —
+                            // AE auto-inserts boundary keys at startTime
+                            // and startTime+srcDur on timeRemapEnabled =
+                            // true, and we want only the chain-derived keys
+                            // driving playback.
+                            var KEY_EPS = 1e-4;
+                            for (var kr = ciTr.numKeys; kr >= 1; kr--) {
+                                var ktr;
+                                try { ktr = ciTr.keyTime(kr); } catch (eKT) { continue; }
+                                var keep = false;
+                                for (var cm = 0; cm < plan.chainKeys.length; cm++) {
+                                    if (Math.abs(ktr - plan.chainKeys[cm].tMaster) < KEY_EPS) { keep = true; break; }
+                                }
+                                if (!keep) try { ciTr.removeKey(kr); } catch (eRK) {}
+                            }
+                            // Force LINEAR on every remaining key — Bezier
+                            // eases produce overshoot artefacts on a sampled
+                            // chain like this where the underlying motion
+                            // is already piece-wise linear by construction.
+                            for (var kf = 1; kf <= ciTr.numKeys; kf++) {
+                                try { ciTr.setInterpolationTypeAtKey(kf, KeyframeInterpolationType.LINEAR, KeyframeInterpolationType.LINEAR); } catch (eL) {}
+                            }
+                        }
+                    } catch (eTR) {}
 
-                    // Shared-mode rename of the shared inner precomp (e.g.
-                    // "Cloud Space slow") so OTHER mainComp references that
-                    // still point at it (.shareSkip entries) read shot-aware
-                    // instead of keeping the original name. Only applies in
-                    // SHARED mode, when the inner is distinct from the outer.
-                    if (item.sharedRenameInner && item.found && item.found.footageComp) {
-                        try { item.found.footageComp.name = shotName + "_shared" + osSuffix; } catch (eSRN) {}
-                    }
+                    // Layer markers in master timeline so the cut bounds
+                    // show on containerInner's strip in containerComp's
+                    // timeline panel.
+                    containerInner.property("Marker").setValueAtTime(plan.masterIn,  cutMarker("cut in"));
+                    containerInner.property("Marker").setValueAtTime(plan.masterOut, cutMarker("cut out"));
 
-                    // When overscan is active the shotComp is larger than the original footage.
-                    // The footageLayer's anchor was set for the original footage size, so sampling
-                    // is offset by half the overscan margin. Shift the anchor to compensate.
+                    // Overscan: containerInner's anchor was set for source-
+                    // sized footage; shotComp is osWidth × osHeight.  Shift
+                    // anchor to re-centre.
                     if (shotOverscan > 0) {
                         try {
                             var osOffX = (osWidth  - source.width)  / 2;
                             var osOffY = (osHeight - source.height) / 2;
-                            var apFL = footageLayer.property("ADBE Transform Group").property("ADBE Anchor Point");
-                            var curFL = apFL.value;
-                            apFL.setValue([curFL[0] + osOffX, curFL[1] + osOffY]);
-                        } catch(eOsAP) {}
+                            var apCI = containerInner.property("ADBE Transform Group").property("ADBE Anchor Point");
+                            var curCI = apCI.value;
+                            apCI.setValue([curCI[0] + osOffX, curCI[1] + osOffY]);
+                        } catch (eOsAP) {}
                     }
-
-                    // Trim the footageLayer (now showing shotComp) to the EDITORIAL
-                    // CUT range, not the cut+handles plate range. Handles are kept
-                    // INSIDE the shotComp for external tools (Nuke, dynamicLink);
-                    // exposing them on the outer layer's timeline makes adjacent
-                    // shots overlap — the trailing handle of shot N covers the
-                    // leading frames of shot N+1 in the same precomp and the edit
-                    // stops reconstructing cleanly.
-                    var flCutIn = 0, flCutOut = 0;
-                    try {
-                        var flStretch = (preReplaceStr !== 0) ? preReplaceStr : 100;
-                        if (preReplaceTREnb) {
-                            // Source→comp mapping is nonlinear for time-remapped layers.
-                            // Use the PRE-replaceSource in/out — they are the cut bounds
-                            // the user established.  Reading footageLayer.inPoint /
-                            // outPoint here would pick up AE's post-replace auto-
-                            // extension, which collapses the layer to the entire
-                            // container span and erases the cut trim.
-                            flCutIn  = preReplaceInP;
-                            flCutOut = preReplaceOutP;
-                        } else {
-                            flCutIn  = footageLayer.startTime + cutStart * (flStretch / 100);
-                            flCutOut = footageLayer.startTime + (cutStart + cutDuration) * (flStretch / 100);
-                        }
-                        footageLayer.inPoint  = flCutIn;
-                        footageLayer.outPoint = flCutOut;
-                        footageLayer.property("Marker").setValueAtTime(flCutIn,  cutMarker("cut in"));
-                        footageLayer.property("Marker").setValueAtTime(flCutOut, cutMarker("cut out"));
-                    } catch(eTrim) {}
-
-                    var precompSrc = layer.source;
-                    containerDurFrames = Math.round(precompSrc.duration * safeFPS);
-
-                } else {
-                    // ── 2. Container (direct footage path) ────────────────────
-                    // Native precompose with moveAllAttributes=true. AE handles
-                    // effect stacking order, masks, transforms, time remap,
-                    // expressions, layer flags (motion blur, 3D, quality, frame
-                    // blending, sampling, preserve-transparency), blending mode,
-                    // parenting, and file bindings on effects like Apply Color
-                    // LUT — all natively and without the silent correctness
-                    // bugs that our hand-rolled moveLayerAttribs had
-                    // (effect-order reversal, dropped layer flags, LUT locate
-                    // dialogs). The precomp path (isPrecomp branch above)
-                    // already uses this same pattern; we now use it here too
-                    // for the direct-footage path.
-                    //
-                    // Capture the ORIGINAL layer's timing before precompose
-                    // invalidates the reference. AE's native precompose does NOT
-                    // reliably preserve the mainComp precomp layer's in/out —
-                    // the new precomp layer tends to span the full comp by
-                    // default, which would wipe out the edit's cut placement.
-                    // We restore the original in/out/startTime ourselves below.
-                    var origInPoint   = layer.inPoint;
-                    var origOutPoint  = layer.outPoint;
-                    var origLayerLabel = 0;
-                    try { origLayerLabel = layer.label; } catch (eLblDF0) {}
-                    var layerIdx      = layer.index; // read before precompose invalidates the ref
-                    var containerComp;
-                    try {
-                        containerComp = mainComp.layers.precompose([layerIdx], shotName + "_container" + osSuffix, true);
-                    } catch (ePC) {
-                        reportError("PREP", ePC, "Direct-footage precompose failed for " + shotName);
-                        return;
-                    }
-                    containerComp.displayStartTime = 0;
-                    containerComp.parentFolder     = shotBin;
-                    containerComp.label            = 8; // Blue — container (editorial)
-                    // Restore the original layer's label colour on the new
-                    // wrapper layer in mainComp. precompose hands it a
-                    // default label otherwise, which loses any colour-
-                    // coding the user set up upstream (e.g. via the
-                    // "Color Time-Reverse Layers" pass).
-                    try { mainComp.layer(layerIdx).label = origLayerLabel; } catch (eLblDF1) {}
-
-                    // The original footage layer now lives inside containerComp with
-                    // every attribute moved in by AE. Find it, then swap its source
-                    // to the shot's render target (shotComp).
-                    var containerInner = null;
-                    for (var ci = 1; ci <= containerComp.numLayers; ci++) {
-                        var cl = containerComp.layer(ci);
-                        try { if (cl.source === source) { containerInner = cl; break; } } catch(eCL) {}
-                    }
-                    if (!containerInner && containerComp.numLayers > 0) {
-                        // Fallback: precompose only put one layer in if we got here.
-                        containerInner = containerComp.layer(1);
-                    }
-
-                    // Container duration = shotComp duration (= source length +
-                    // 1 buffer frame), so the inner _comp layer can be shown at
-                    // its FULL intrinsic length inside the container, not
-                    // trimmed to the cut+handles range. Container time aligns
-                    // 1:1 with shotComp time (= source time), which also makes
-                    // cut markers sit at the source-time cutStart/cutEnd — same
-                    // positions as the plateInner markers inside shotComp.
-                    var shotCompDurSec = shotComp.duration;
-                    try {
-                        containerComp.duration = shotCompDurSec;
-                        containerComp.displayStartTime = 0;
-                        // Work area = editorial cut (same rationale as shotComp).
-                        containerComp.workAreaStart    = cutStart;
-                        containerComp.workAreaDuration = cutDuration;
-                    } catch(eDur) {}
-
-                    if (containerInner) {
-                        containerInner.replaceSource(shotComp, false);
-
-                        // AE may auto-enable timeRemap on replaceSource when
-                        // the new source duration differs from the original,
-                        // and inserts boundary keys at startTime / startTime+
-                        // srcDur to span the new source.  Those keys sit
-                        // outside the cut+handles span we want; strip any
-                        // out-of-cut keys before we set inPoint/outPoint
-                        // so AE can't auto-extend the layer back out.
-                        try {
-                            if (containerInner.timeRemapEnabled) {
-                                var ciTr = containerInner.property("Time Remap");
-                                if (ciTr) {
-                                    var ciCutIn  = fullStart;
-                                    var ciCutOut = fullStart + fullDurationSec;
-                                    var ciEPS    = 1e-3;
-                                    for (var cik = ciTr.numKeys; cik >= 1; cik--) {
-                                        var cikt;
-                                        try { cikt = ciTr.keyTime(cik); } catch (ecikt) { continue; }
-                                        if (cikt < ciCutIn - ciEPS || cikt > ciCutOut + ciEPS) {
-                                            try { ciTr.removeKey(cik); } catch (ecirk) {}
-                                        }
-                                    }
-                                    // Dedupe AE-auto boundary keys (see comment in
-                                    // precomp branch above for the full rationale —
-                                    // AE inserts a v=0 / v=srcDur key at exact
-                                    // startTime that drifts alongside our user key
-                                    // by floating-point sub-EPS, producing duplicate
-                                    // keys with wild ease slopes).
-                                    var ciSrcDurNew = (containerInner.source && containerInner.source.duration) ? containerInner.source.duration : 0;
-                                    var ciSrcDurOld = (source && source.duration) ? source.duration : 0;
-                                    var ciVTOL      = 0.5;
-                                    var _ciAutoness = function (v) {
-                                        var d0   = Math.abs(v);
-                                        var dNew = (ciSrcDurNew > 0) ? Math.abs(v - ciSrcDurNew) : Infinity;
-                                        var dOld = (ciSrcDurOld > 0) ? Math.abs(v - ciSrcDurOld) : Infinity;
-                                        return Math.min(d0, dNew, dOld);
-                                    };
-                                    var _ciDedupeAt = function (t) {
-                                        var hits = [];
-                                        for (var hi = 1; hi <= ciTr.numKeys; hi++) {
-                                            var ht;
-                                            try { ht = ciTr.keyTime(hi); } catch (eHt) { continue; }
-                                            if (Math.abs(ht - t) < ciEPS) hits.push(hi);
-                                        }
-                                        if (hits.length < 2) return;
-                                        var worstIdx = -1, worstScore = Infinity;
-                                        for (var di = 0; di < hits.length; di++) {
-                                            var dv;
-                                            try { dv = ciTr.keyValue(hits[di]); } catch (eDv) { continue; }
-                                            var score = _ciAutoness(dv);
-                                            if (score < worstScore) { worstScore = score; worstIdx = hits[di]; }
-                                        }
-                                        if (worstIdx > 0 && worstScore < ciVTOL) {
-                                            try { ciTr.removeKey(worstIdx); } catch (eRD) {}
-                                        }
-                                    };
-                                    _ciDedupeAt(ciCutIn);
-                                    _ciDedupeAt(ciCutOut);
-                                }
-                            }
-                        } catch (ePostPruneCI) {}
-
-                        // startTime=0 lines container time up with shotComp
-                        // (= source) time. Trim inPoint/outPoint to the clip +
-                        // handles span so the layer in the container only
-                        // shows the used range — outside that range it's just
-                        // empty source that Nuke / Resolve / dynamicLink don't
-                        // need. Container duration stays at shotComp.duration
-                        // so source-time identity with mainComp still holds.
-                        containerInner.startTime = 0;
-                        containerInner.inPoint   = fullStart;
-                        containerInner.outPoint  = fullStart + fullDurationSec;
-                        // Markers in source/container time: cut_in at cutStart,
-                        // cut_out at cutStart + cutDuration. containerComp,
-                        // plateInner (inside shotComp), and containerInner all
-                        // share the same time axis now.
-                        containerComp.markerProperty.setValueAtTime(cutStart,               cutMarker("cut in"));
-                        containerComp.markerProperty.setValueAtTime(cutStart + cutDuration, cutMarker("cut out"));
-                        plateInner.property("Marker").setValueAtTime(cutStart,               cutMarker("cut in"));
-                        plateInner.property("Marker").setValueAtTime(cutStart + cutDuration, cutMarker("cut out"));
-                        containerInner.property("Marker").setValueAtTime(cutStart,               cutMarker("cut in"));
-                        containerInner.property("Marker").setValueAtTime(cutStart + cutDuration, cutMarker("cut out"));
-
-                        // Overscan: containerInner's anchor was set for source-sized
-                        // footage, but shotComp is osWidth × osHeight. Shift to
-                        // re-center sampling on the inflated source.
-                        if (shotOverscan > 0) {
-                            try {
-                                var osOffX = (osWidth  - source.width)  / 2;
-                                var osOffY = (osHeight - source.height) / 2;
-                                var apCI = containerInner.property("ADBE Transform Group").property("ADBE Anchor Point");
-                                var curCI = apCI.value;
-                                apCI.setValue([curCI[0] + osOffX, curCI[1] + osOffY]);
-                            } catch(eOsAP2) {}
-                        }
-                    }
-
-                    // Re-bind `layer` to the new precomp layer in mainComp so the
-                    // downstream `layer.inPoint` read for Nuke data still works.
-                    // AE places the new precomp layer at the same index the original
-                    // occupied; if anything shifted, scan for the layer whose source
-                    // is our new containerComp.
-                    try { layer = mainComp.layer(layerIdx); } catch(eLIdx) {}
-                    var sourceMatchOK = false;
-                    try { sourceMatchOK = (layer && layer.source === containerComp); } catch(eSM) {}
-                    if (!sourceMatchOK) {
-                        for (var mL = 1; mL <= mainComp.numLayers; mL++) {
-                            try {
-                                if (mainComp.layer(mL).source === containerComp) { layer = mainComp.layer(mL); break; }
-                            } catch(eML) {}
-                        }
-                    }
-
-                    // Align the mainComp precomp layer with the source-aligned
-                    // container timeline. Container time equals source time, so
-                    // we want mainComp time origInPoint (cut_in) to show
-                    // container time cutStart. precomp_layer.startTime = (origInPoint - cutStart).
-                    // Edit placement (inPoint..outPoint) is preserved exactly
-                    // at origInPoint..origOutPoint.
-                    if (layer) {
-                        try {
-                            layer.startTime = origInPoint - cutStart;
-                            layer.inPoint   = origInPoint;
-                            layer.outPoint  = origOutPoint;
-                        } catch (eTiming) {}
-                    }
-
-                    // Patch every selLayers / expandedLayers entry that still holds a
-                    // reference to the pre-precompose layer. Without this, the
-                    // dynamicLink build loop later iterates selLayers and hits stale
-                    // "Object is invalid" refs for every layer that went through
-                    // native precompose.
-                    for (var sUpd = 0; sUpd < selLayers.length; sUpd++) {
-                        if (selLayers[sUpd].mainLayerIdx === layerIdx) {
-                            selLayers[sUpd].layer     = layer;
-                            selLayers[sUpd].isPrecomp = true;
-                        }
-                    }
-                    for (var eUpd = i + 1; eUpd < expandedLayers.length; eUpd++) {
-                        if (expandedLayers[eUpd].mainLayerIdx === layerIdx) {
-                            expandedLayers[eUpd].layer = layer;
-                        }
-                    }
-
-                    containerDurFrames = Math.round(source.duration * safeFPS);
                 }
+
+                // Re-bind `layer` to the wrapper precomp layer in mainComp.
+                try { layer = mainComp.layer(layerIdx); } catch (eLIdx) {}
+                var sourceMatchOK = false;
+                try { sourceMatchOK = (layer && layer.source === containerComp); } catch (eSM) {}
+                if (!sourceMatchOK) {
+                    for (var mL = 1; mL <= mainComp.numLayers; mL++) {
+                        try {
+                            if (mainComp.layer(mL).source === containerComp) { layer = mainComp.layer(mL); break; }
+                        } catch (eML) {}
+                    }
+                }
+
+                // Wrapper layer in mainComp: startTime=0 keeps containerComp.t
+                // identical to mainComp.t (no time-axis shift).  in/out at
+                // [masterIn, masterOut] preserves the editorial cut window.
+                if (layer) {
+                    try {
+                        layer.startTime = 0;
+                        layer.inPoint   = plan.masterIn;
+                        layer.outPoint  = plan.masterOut;
+                    } catch (eTiming) {}
+                    try { layer.label = origLayerLabel; } catch (eL1) {}
+                }
+
+                // Patch every selLayers / expandedLayers entry that still
+                // holds a stale ref to the pre-precompose layer.  Without
+                // this, the dynamicLink build loop later iterates selLayers
+                // and hits "Object is invalid" refs.
+                for (var sUpd = 0; sUpd < selLayers.length; sUpd++) {
+                    if (selLayers[sUpd].mainLayerIdx === layerIdx) {
+                        selLayers[sUpd].layer     = layer;
+                        selLayers[sUpd].isPrecomp = true;
+                    }
+                }
+                for (var eUpd = i + 1; eUpd < expandedLayers.length; eUpd++) {
+                    if (expandedLayers[eUpd].mainLayerIdx === layerIdx) {
+                        expandedLayers[eUpd].layer = layer;
+                    }
+                }
+
+                // Container size in frames — used by the Nuke metadata
+                // export below.
+                var containerDurFrames = Math.round(source.duration * safeFPS);
 
                 // Lock the raw plate AFTER all marker / timing / effect writes
                 // (both branches above set markers on plateInner). Reimported
@@ -4592,7 +4030,15 @@ NOTES
                                                     revL.startTime = 0;
                                                     try { revL.position.setValue([ri.w / 2, ri.h / 2]); } catch (eBPos) {}
                                                     revL.label = 8;
-                                                    try { revL.comment = "Reversed variant of " + ri.n + "_plate (rendered from _stack via wrapper time-remap)."; } catch (eRComm) {}
+                                                    // Disabled by default so the container's
+                                                    // descending time-remap (which already
+                                                    // reverses the cut visually by playing
+                                                    // the forward plate backward) doesn't
+                                                    // double-reverse against the explicitly-
+                                                    // reversed bake.  User toggles it on for
+                                                    // diff-key A/B by enabling the layer.
+                                                    try { revL.enabled = false; } catch (eRevEn) {}
+                                                    try { revL.comment = "Reversed variant of " + ri.n + "_plate (rendered from _stack via wrapper time-remap). Disabled by default — toggle on to use as the active variant for diff-key A/B; remember to also flip the container's time-remap from descending to ascending for the cut to play correctly."; } catch (eRComm) {}
                                                     try { revL.property("Marker").setValueAtTime(cutInPP,  cutMarker("cut in"));  } catch (eRBM1) {}
                                                     try { revL.property("Marker").setValueAtTime(cutOutPP, cutMarker("cut out")); } catch (eRBM2) {}
                                                 } catch (eRevAdd) {}

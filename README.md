@@ -522,22 +522,25 @@ comp (vs. the layer-scoped Roundtrip tools above). Live in the panel's
 
 ### Diagnostics
 
-- **Dump Timing State** — read-only snapshot of every layer's timing
-  state in the active comp + every nested precomp. Captures
-  `inPoint`/`outPoint`/`startTime`/`duration`, time stretch, time-remap
-  keyframes (time/value/interpolation/ease), source duration, layer
-  markers, and parent linkage. Tags layers with any time effect as
-  `[TIME-EFFECT]` so they're easy to grep.
+- **Dump Source-Range Chain** — read-only source-frame-range tracer.
+  For every top-level visible layer in the active comp, walks down
+  through every nested precomp + time-effect (stretch / time-remap)
+  and reports the FOOTAGE source frame range the master cut should
+  be showing — printing the math at every step (time-effect, comp-time
+  window in, source-time window out). Then scans the project for
+  `*_stack` precomps and reports what footage range each one *actually*
+  covers, flagging mismatches against the expected plate range.
 
-  Run BEFORE and AFTER each roundtrip phase, tag each snapshot
-  (e.g. "before", "after"), then diff the resulting text files to
-  see exactly what changed. The dump file lands next to the `.aep`
-  as `timing_dump_<comp>_<tag>.txt`.
+  Run BEFORE the roundtrip to capture ground-truth source ranges,
+  then AFTER each version to see where the script's plate-range or
+  time-remap math diverged. The dump lands next to the `.aep` as
+  `source_chain_<comp>_<tag>.txt`.
 
-  Useful when troubleshooting time-remap / time-reverse handling on
-  footage layers and nested precomps — comparing dumps usually pins
-  down exactly which layer's `outPoint` got auto-extended or which
-  remap keys drifted.
+  Useful when a roundtrip plate looks "off by frames" or a cut
+  collapses to a single frame — Pass 2's `*** MISMATCH ***` lines
+  point directly at the stack whose plate was extracted from the
+  wrong source range, with delta-start / delta-end values so it's
+  clear which way it drifted.
 
 ### Companion repos
 
