@@ -96,7 +96,11 @@
             if (!(it instanceof CompItem)) continue;
             if (!/_container(?:_OS)?$/.test(it.name)) continue;
             var st = detectShotState(it);
-            if (st) out.push(st);
+            // Exclude shots that don't have a _reversed.mov in their
+            // stack — there's no variant to switch to, so they don't
+            // belong in the dialog.  User runs Bake first to add the
+            // reversed variant.
+            if (st && st.hasBake) out.push(st);
         }
         out.sort(function (a, b) {
             var an = a.shotName.toLowerCase(), bn = b.shotName.toLowerCase();
@@ -228,10 +232,7 @@
     }
 
     function redrawLabel(lbl, st) {
-        var status = st.hasBake
-            ? (st.bakeActive ? "bake active" : "plate active")
-            : "no _reversed.mov — bake first";
-        lbl.text = st.shotName + "   —   " + status;
+        lbl.text = st.shotName + "   —   " + (st.bakeActive ? "bake active" : "plate active");
     }
 
     // Force ScriptUI to repaint immediately so the user sees state

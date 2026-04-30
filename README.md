@@ -539,25 +539,22 @@ comp (vs. the layer-scoped Roundtrip tools above). Live in the panel's
 
 ### Diagnostics
 
-- **Dump Source-Range Chain** — read-only source-frame-range tracer.
-  For every top-level visible layer in the active comp, walks down
-  through every nested precomp + time-effect (stretch / time-remap)
-  and reports the FOOTAGE source frame range the master cut should
-  be showing — printing the math at every step (time-effect, comp-time
-  window in, source-time window out). Then scans the project for
-  `*_stack` precomps and reports what footage range each one *actually*
-  covers, flagging mismatches against the expected plate range.
+- **Deep Inspect** — single-shot read-only dumper covering everything:
+  full layer state (effects, expressions, transforms, time-remap with
+  ease info, markers, flags, blend mode, parent linkage), every nested
+  precomp, a per-frame source-frame trace through every chain, and
+  `*_stack` inspection with `*** MISMATCH ***` flagging when a stack's
+  plate range doesn't match what the chain math says it should be.
 
-  Run BEFORE the roundtrip to capture ground-truth source ranges,
-  then AFTER each version to see where the script's plate-range or
-  time-remap math diverged. The dump lands next to the `.aep` as
-  `source_chain_<comp>_<tag>.txt`.
-
-  Useful when a roundtrip plate looks "off by frames" or a cut
-  collapses to a single frame — Pass 2's `*** MISMATCH ***` lines
-  point directly at the stack whose plate was extracted from the
-  wrong source range, with delta-start / delta-end values so it's
-  clear which way it drifted.
+  Run BEFORE the roundtrip to capture ground-truth, then AFTER each
+  version to find drift. The dump lands next to the `.aep` as
+  `deep_inspect_<comp>_<tag>.txt`. Useful when a plate looks "off by
+  frames", a cut collapses to a single frame, or an effect / expression
+  / marker didn't survive the roundtrip — Pass 3's mismatch lines
+  point directly at broken plates with delta-start / delta-end values;
+  Pass 2's per-frame trace shows exactly what footage frame is on
+  screen at every master moment so you can pin chain-math drift to
+  a specific step.
 
 ### Companion repos
 

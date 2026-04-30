@@ -488,6 +488,11 @@
     var fps = topComp.frameRate;
     var handleSec = handleFrames / fps;
 
+    // Accumulator for Pass 3's mismatch flagging — for each top-level
+    // layer, capture the deepest footage's name + the expected plate
+    // range (visible source ± handles, clamped to source duration).
+    var expected = [];
+
     function walkChainForTrace(masterLayer) {
         var chain = [];
         var current = masterLayer;
@@ -584,6 +589,11 @@
         var stepFrames = frameStep;
         var loFrame = Math.round(traceLo * fps);
         var hiFrame = Math.round(traceHi * fps);
+        // Track min/max of the deepest source value across the cut
+        // window for the Pass 3 mismatch comparison.
+        var visMin = Infinity, visMax = -Infinity;
+        var cutLo = Math.round(masterIn * fps);
+        var cutHi = Math.round(masterOut * fps);
         for (var f = loFrame; f <= hiFrame; f += stepFrames) {
             var mt = f / fps;
             var marker = "";
@@ -599,8 +609,30 @@
             }
             row += marker;
             L(row);
+            // Track visible source range only across the cut window
+            // proper (handles excluded) so the expected plate range
+            // reflects what the cut shows, not what the dynamicLink
+            // wrapper extends to.
+            if (f >= cutLo - 1 && f <= cutHi + 1) {
+                if (t < visMin) visMin = t;
+                if (t > visMax) visMax = t;
+            }
         }
         L("");
+
+        // Save expected plate range for Pass 3 cross-reference.
+        if (visMin !== Infinity && visMax !== -Infinity) {
+            var srcHandle = handleFrames / srcFR; // handle in source-time units
+            var plateLo = Math.max(0,      visMin - srcHandle);
+            var plateHi = Math.min(srcDur, visMax + srcHandle);
+            expected.push({
+                topLayerName: topL.name,
+                footageName:  footage.name,
+                plateStart:   plateLo,
+                plateEnd:     plateHi,
+                srcDur:       srcDur
+            });
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -670,6 +702,24 @@
             if (isFile) {
                 L("           covers source: [" + fmt(srcLo) + ", " + fmt(srcHi) +
                   "]  (srcDur=" + fmt(lyr.source.duration) + ")");
+                // Cross-reference against Pass 2's expected plate ranges
+                // and flag mismatches — same logic the old
+                // dump_source_range_chain.jsx used in its Pass 2.
+                for (var ei = 0; ei < expected.length; ei++) {
+                    var ex = expected[ei];
+                    if (ex.footageName !== lyr.source.name) continue;
+                    var dLo = Math.abs(ex.plateStart - srcLo);
+                    var dHi = Math.abs(ex.plateEnd   - srcHi);
+                    if (dLo > 0.04 || dHi > 0.04) {
+                        L("           *** MISMATCH vs Pass 2 expected plate range for top layer '" + ex.topLayerName + "'");
+                        L("               expected: [" + fmt(ex.plateStart) + ", " + fmt(ex.plateEnd) + "]");
+                        L("               actual:   [" + fmt(srcLo)         + ", " + fmt(srcHi)         + "]");
+                        L("               delta:    start=" + fmt(srcLo - ex.plateStart) +
+                          "  end=" + fmt(srcHi - ex.plateEnd));
+                    } else {
+                        L("           ✓ matches expected plate range for top layer '" + ex.topLayerName + "'");
+                    }
+                }
             }
         }
         L("");
