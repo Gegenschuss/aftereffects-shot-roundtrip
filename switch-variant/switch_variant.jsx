@@ -25,10 +25,83 @@
 
 (function () {
 
+    // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+    // dark panel theme instead of the macOS system alert with the Ae app
+    // icon slapped on top.
+    function greyAlert(title, msg) {
+        var dlg = new Window("dialog", title);
+        dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+        dlg.spacing = 10; dlg.margins = 14;
+        var p = dlg.add("panel", undefined, "");
+        p.orientation = "column"; p.alignChildren = ["fill", "top"];
+        p.margins = [12, 12, 12, 12]; p.spacing = 4;
+        var lines = String(msg).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            p.add("statictext", undefined, lines[i]);
+        }
+        var bg = dlg.add("group");
+        bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+        bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+        var ok = bg.add("button", undefined, "OK", { name: "ok" });
+        ok.preferredSize = [90, 28];
+        ok.onClick = function () { dlg.close(1); };
+        dlg.show();
+    }
+
     if (!app.project) {
-        alert("Open a project first.");
+        greyAlert("Switch Variant", "Open a project first.");
         return;
     }
+    var proj = app.project;
+    if (!proj.file) {
+        greyAlert("Switch Variant", "Save the project first so it can be versioned before any changes.");
+        return;
+    }
+
+    // ── version bump ─────────────────────────────────────────────────
+    // Same VFX-versioning rule the other roundtrip tools use:
+    // MyProject_v03.aep → MyProject_v04.aep before the first mutation.
+    // Bumped once on script start so a single Switch Variant session
+    // produces one new AEP regardless of how many rows the user clicks.
+    function pad(n, s) { var str = "" + n; while (str.length < s) str = "0" + str; return str; }
+    function saveAsNextVersion() {
+        var cur = proj.file;
+        if (!cur) return null;
+        var baseName = cur.name.replace(/\.aep$/i, "");
+        var m = baseName.match(/^(.*?)(_?v)(\d+)$/);
+        var stem, prefix, width, next;
+        if (m) {
+            stem   = m[1];
+            prefix = m[2];
+            width  = m[3].length;
+            next   = parseInt(m[3], 10) + 1;
+        } else {
+            stem   = baseName;
+            prefix = "_v";
+            width  = 2;
+            next   = 1;
+        }
+        var newFile = null;
+        while (next < 10000) {
+            var candidate = new File(cur.parent.fsName + "/" + stem + prefix + pad(next, width) + ".aep");
+            if (!candidate.exists) { newFile = candidate; break; }
+            next++;
+        }
+        if (!newFile) {
+            greyAlert("Switch Variant", "Could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
+            return null;
+        }
+        try {
+            proj.save();
+            proj.save(newFile);
+        } catch (eSave) {
+            greyAlert("Switch Variant", "Failed to save versioned copy —\n" + eSave.message +
+                  "\n\nAborting so the original file stays untouched.");
+            return null;
+        }
+        return newFile;
+    }
+    if (!saveAsNextVersion()) return;
 
     // ─────────────────────────────────────────────────────────────────
     // Project scan: collect every *_container CompItem and analyse its

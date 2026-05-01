@@ -80,7 +80,7 @@
             group:  "Project",
             icon:   "⟡",
             label:  "Create dynamicLink Comps",
-            tip:    "Standalone dynamicLink builder. Prompts for handle frames, then for each selected precomp or footage layer creates a wrapper comp with full cut + 2× handles duration (black padded) in /Shots/dynamicLink.",
+            tip:    "Standalone dynamicLink builder. Prompts for handle frames, then for each selected precomp or footage layer creates a wrapper comp with full cut + 2× handles duration (black padded) in /Shots/_dynamicLink.",
             file:   "create-dynamiclink-comps/create_dynamiclink_comps.jsx"
         },
         {
@@ -117,10 +117,33 @@
 
     // ── helpers ────────────────────────────────────────────────────────────────
 
+    // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+    // dark panel theme instead of the macOS system alert with the Ae app
+    // icon slapped on top.
+    function greyAlert(title, msg) {
+        var dlg = new Window("dialog", title);
+        dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+        dlg.spacing = 10; dlg.margins = 14;
+        var p = dlg.add("panel", undefined, "");
+        p.orientation = "column"; p.alignChildren = ["fill", "top"];
+        p.margins = [12, 12, 12, 12]; p.spacing = 4;
+        var lines = String(msg).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            p.add("statictext", undefined, lines[i]);
+        }
+        var bg = dlg.add("group");
+        bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+        bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+        var ok = bg.add("button", undefined, "OK", { name: "ok" });
+        ok.preferredSize = [90, 28];
+        ok.onClick = function () { dlg.close(1); };
+        dlg.show();
+    }
+
     function runScript(relativePath) {
         var f = new File(BASE.fsName + "/" + relativePath);
         if (!f.exists) {
-            alert("Script not found:\n" + f.fsName);
+            greyAlert("Gegenschuss Shot Roundtrip", "Script not found:\n" + f.fsName);
             return;
         }
         $.evalFile(f);
@@ -164,7 +187,7 @@
         brandCol.orientation = "column";
         brandCol.alignment = ["left", "center"];
         brandCol.spacing = 2;
-        var buildDate = brandCol.add("statictext", undefined, "20260501");
+        var buildDate = brandCol.add("statictext", undefined, "20260501r");
         // NOTE to editor: keep this date in sync with ship day (YYYYMMDD).
         buildDate.graphics.font = ScriptUI.newFont("Helvetica", "REGULAR", 11);
         buildDate.graphics.foregroundColor = buildDate.graphics.newPen(buildDate.graphics.PenType.SOLID_COLOR, [0.55, 0.55, 0.55, 1], 1);

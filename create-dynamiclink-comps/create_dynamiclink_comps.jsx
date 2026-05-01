@@ -11,7 +11,7 @@
  *
  * For each selected layer in the active comp whose source is a CompItem
  * (precomp) or an imported footage file, builds a new wrapper comp named
- * "<source>_dynamicLink" in /Shots/dynamicLink with duration exactly
+ * "<source>_dynamicLink" in /Shots/_dynamicLink with duration exactly
  * cut + 2 × handleFrames. Uses the proven extend → wrap → contract sequence
  * so time-remap / time-stretch layers get correct source offsets, and any
  * handle time lost to comp-edge clamping is padded with black automatically
@@ -26,15 +26,38 @@
 
 (function () {
 
+    // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+    // dark panel theme instead of the macOS system alert with the Ae app
+    // icon slapped on top.
+    function greyAlert(title, msg) {
+        var dlg = new Window("dialog", title);
+        dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+        dlg.spacing = 10; dlg.margins = 14;
+        var p = dlg.add("panel", undefined, "");
+        p.orientation = "column"; p.alignChildren = ["fill", "top"];
+        p.margins = [12, 12, 12, 12]; p.spacing = 4;
+        var lines = String(msg).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            p.add("statictext", undefined, lines[i]);
+        }
+        var bg = dlg.add("group");
+        bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+        bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+        var ok = bg.add("button", undefined, "OK", { name: "ok" });
+        ok.preferredSize = [90, 28];
+        ok.onClick = function () { dlg.close(1); };
+        dlg.show();
+    }
+
     var comp = app.project.activeItem;
     if (!(comp instanceof CompItem)) {
-        alert("Create dynamicLink: please open a composition first.");
+        greyAlert("Create dynamicLink Comps", "Please open a composition first.");
         return;
     }
 
     var selected = comp.selectedLayers;
     if (selected.length === 0) {
-        alert("Create dynamicLink: select at least one layer.");
+        greyAlert("Create dynamicLink Comps", "Select at least one layer.");
         return;
     }
 
@@ -54,7 +77,7 @@
         if (ok) targets.push(l);
     }
     if (targets.length === 0) {
-        alert("Create dynamicLink: no selected layer points at a comp or a file footage item.");
+        greyAlert("Create dynamicLink Comps", "No selected layer points at a comp or a file footage item.");
         return;
     }
 
@@ -87,7 +110,7 @@
     }
 
     var binShots   = findOrCreateFolder(proj.rootFolder, "Shots");
-    var binDynLink = findOrCreateFolder(binShots, "dynamicLink");
+    var binDynLink = findOrCreateFolder(binShots, "_dynamicLink");
 
     // ── time mapping ───────────────────────────────────────────────────────────
 
@@ -98,6 +121,57 @@
         var stretch = (layer.stretch !== 0) ? layer.stretch : 100;
         return (compTime - layer.startTime) * (100 / stretch);
     }
+
+    // ── version bump ───────────────────────────────────────────────────────────
+    // Same VFX-versioning rule as Shot Roundtrip / Import Returns:
+    // MyProject_v03.aep → MyProject_v04.aep before any mutation, so the
+    // original file is the rollback point if anything goes sideways. If
+    // the project hasn't been saved yet, abort — there's no anchor to
+    // version off.
+    if (!proj.file) {
+        greyAlert("Create dynamicLink Comps", "Save the project first so it can be versioned before any changes.");
+        return;
+    }
+    function pad(n, s) { var str = "" + n; while (str.length < s) str = "0" + str; return str; }
+    function saveAsNextVersion() {
+        var cur = proj.file;
+        if (!cur) return null;
+        var baseName = cur.name.replace(/\.aep$/i, "");
+        var m = baseName.match(/^(.*?)(_?v)(\d+)$/);
+        var stem, prefix, width, next;
+        if (m) {
+            stem   = m[1];
+            prefix = m[2];
+            width  = m[3].length;
+            next   = parseInt(m[3], 10) + 1;
+        } else {
+            stem   = baseName;
+            prefix = "_v";
+            width  = 2;
+            next   = 1;
+        }
+        var newFile = null;
+        while (next < 10000) {
+            var candidate = new File(cur.parent.fsName + "/" + stem + prefix + pad(next, width) + ".aep");
+            if (!candidate.exists) { newFile = candidate; break; }
+            next++;
+        }
+        if (!newFile) {
+            greyAlert("Create dynamicLink Comps", "Could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
+            return null;
+        }
+        try {
+            proj.save();
+            proj.save(newFile);
+        } catch (eSave) {
+            greyAlert("Create dynamicLink Comps", "Failed to save versioned copy —\n" + eSave.message +
+                  "\n\nAborting so the original file stays untouched.");
+            return null;
+        }
+        return newFile;
+    }
+    var versionedFile = saveAsNextVersion();
+    if (!versionedFile) return;
 
     // ── build ──────────────────────────────────────────────────────────────────
 
@@ -171,7 +245,7 @@
     if (errors.length > 0) {
         msg += "\n\nErrors (" + errors.length + "):\n" + errors.join("\n");
     }
-    alert(msg);
+    greyAlert("Create dynamicLink Comps", msg);
 
     // ── prompt helper ──────────────────────────────────────────────────────────
 
@@ -182,7 +256,7 @@
 
         var about = dlg.add("statictext", undefined,
               "For each selected precomp or footage layer, builds a wrapper "
-            + "comp named \"<source>_dynamicLink\" in /Shots/dynamicLink. "
+            + "comp named \"<source>_dynamicLink\" in /Shots/_dynamicLink. "
             + "Wrapper duration is cut + 2× handles (missing frames are "
             + "black-padded). Used by Premiere to Dynamic Link each shot "
             + "back into the cut with safe handles for re-trim.",
@@ -213,7 +287,7 @@
         btnCancel.onClick = function () { dlg.close(2); };
         btnOK.onClick = function () {
             var n = parseInt(input.text, 10);
-            if (isNaN(n) || n < 0) { alert("Handle frames must be a non-negative integer."); return; }
+            if (isNaN(n) || n < 0) { greyAlert("Create dynamicLink Comps", "Handle frames must be a non-negative integer."); return; }
             picked = n;
             dlg.close(1);
         };

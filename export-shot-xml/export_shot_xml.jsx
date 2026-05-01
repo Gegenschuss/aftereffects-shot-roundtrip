@@ -63,6 +63,29 @@
 
     // ─── helpers ────────────────────────────────────────────────────────────
 
+    // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+    // dark panel theme instead of the macOS system alert with the Ae app
+    // icon slapped on top.
+    function greyAlert(title, msg) {
+        var dlg = new Window("dialog", title);
+        dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+        dlg.spacing = 10; dlg.margins = 14;
+        var p = dlg.add("panel", undefined, "");
+        p.orientation = "column"; p.alignChildren = ["fill", "top"];
+        p.margins = [12, 12, 12, 12]; p.spacing = 4;
+        var lines = String(msg).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            p.add("statictext", undefined, lines[i]);
+        }
+        var bg = dlg.add("group");
+        bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+        bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+        var ok = bg.add("button", undefined, "OK", { name: "ok" });
+        ok.preferredSize = [90, 28];
+        ok.onClick = function () { dlg.close(1); };
+        dlg.show();
+    }
+
     function isFootageLayer(layer) {
         if (!(layer instanceof AVLayer)) return false;
         if (!layer.source) return false;
@@ -446,7 +469,7 @@
     // ─── main ────────────────────────────────────────────────────────────────
 
     var proj = app.project;
-    if (!proj) { alert("No project open."); return; }
+    if (!proj) { greyAlert("Export Shot XML", "No project open."); return; }
 
     // Project base name used for the sequence name inside the XML and the
     // generated output filename. Strip the .aep extension. Fall back to
@@ -527,12 +550,12 @@
     if (sourceMode === "shots") {
         var shotsFolder = findShotsFolder(proj.rootFolder);
         if (!shotsFolder) {
-            alert("Could not find a folder named \"Shots\" in the project.");
+            greyAlert("Export Shot XML", "Could not find a folder named \"Shots\" in the project.");
             return;
         }
         collectCompItems(shotsFolder, comps);
         if (comps.length === 0) {
-            alert("No \"*_comp\" compositions found inside the Shots folder.");
+            greyAlert("Export Shot XML", "No \"*_comp\" compositions found inside the Shots folder.");
             return;
         }
         comps.sort(function (a, b) {
@@ -542,7 +565,7 @@
         // activeComp mode: the current composition IS the sequence source.
         var activeC = proj.activeItem;
         if (!(activeC instanceof CompItem)) {
-            alert("Export XML: \"Active composition\" mode requires a composition to be open.");
+            greyAlert("Export Shot XML", "\"Active composition\" mode requires a composition to be open.");
             return;
         }
         comps = [activeC];
@@ -800,7 +823,7 @@
     }
 
     if (clips.length === 0) {
-        alert("No clips could be exported.\n\n" + warnings.join("\n"));
+        greyAlert("Export Shot XML", "No clips could be exported.\n\n" + warnings.join("\n"));
         return;
     }
 
@@ -1043,7 +1066,7 @@
 
     saveFile.encoding = "UTF-8";
     if (!saveFile.open("w")) {
-        alert("Failed to write XML file:\n" + saveFile.fsName + "\n\nCheck folder permissions and free disk space.");
+        greyAlert("Export Shot XML", "Failed to write XML file:\n" + saveFile.fsName + "\n\nCheck folder permissions and free disk space.");
         return;
     }
     saveFile.write(L.join("\n"));

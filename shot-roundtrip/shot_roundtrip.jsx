@@ -143,11 +143,35 @@ NOTES
 {
     function vfxRoundtripEpsilon() {
         var proj = app.project;
-        if (!proj || !proj.activeItem || !(proj.activeItem instanceof CompItem)) { alert("Shot Roundtrip: please open a composition first."); return; }
-        if (proj.activeItem.selectedLayers.length === 0) { alert("Shot Roundtrip: select at least one layer."); return; }
+
+        // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+        // dark panel theme instead of the macOS system alert with the Ae app
+        // icon slapped on top.
+        function greyAlert(title, msg) {
+            var dlg = new Window("dialog", title);
+            dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+            dlg.spacing = 10; dlg.margins = 14;
+            var p = dlg.add("panel", undefined, "");
+            p.orientation = "column"; p.alignChildren = ["fill", "top"];
+            p.margins = [12, 12, 12, 12]; p.spacing = 4;
+            var lines = String(msg).split("\n");
+            for (var i = 0; i < lines.length; i++) {
+                p.add("statictext", undefined, lines[i]);
+            }
+            var bg = dlg.add("group");
+            bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+            bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+            var ok = bg.add("button", undefined, "OK", { name: "ok" });
+            ok.preferredSize = [90, 28];
+            ok.onClick = function () { dlg.close(1); };
+            dlg.show();
+        }
+
+        if (!proj || !proj.activeItem || !(proj.activeItem instanceof CompItem)) { greyAlert("Shot Roundtrip", "Please open a composition first."); return; }
+        if (proj.activeItem.selectedLayers.length === 0) { greyAlert("Shot Roundtrip", "Select at least one layer."); return; }
         // Required downstream (output paths, render save, per-shot .nk filenames).
         // Guard here so we fail before collecting shot data, not mid-process.
-        if (!proj.file) { alert("Shot Roundtrip: save the project first (output paths are derived from the .aep location)."); return; }
+        if (!proj.file) { greyAlert("Shot Roundtrip", "Save the project first (output paths are derived from the .aep location)."); return; }
 
         // ------------------------------------------------
         // UI
@@ -217,7 +241,7 @@ NOTES
                 // already guarantees activeItem is a CompItem.
                 var comp = proj && proj.activeItem;
                 if (!comp || !(comp instanceof CompItem) || !comp.numLayers) {
-                    alert("No comp layers to color.");
+                    greyAlert("Shot Roundtrip", "No comp layers to color.");
                     return;
                 }
                 app.beginUndoGroup("Color Time-Reverse Layers");
@@ -238,13 +262,13 @@ NOTES
                             if (isRev) hadReverse++;
                         } catch (eL) {}
                     }
-                    alert("Colored " + painted + " layer" + (painted === 1 ? "" : "s") +
+                    greyAlert("Shot Roundtrip", "Colored " + painted + " layer" + (painted === 1 ? "" : "s") +
                           " — " + hadReverse + " reversed (blue), the rest sandstone.");
                 } finally {
                     app.endUndoGroup();
                 }
             } catch (eC) {
-                alert("Color Time-Reverse Layers failed:\n" + eC.message);
+                greyAlert("Shot Roundtrip", "Color Time-Reverse Layers failed:\n" + eC.message);
             }
         };
 
@@ -253,7 +277,21 @@ NOTES
         pnlOpt.orientation = "column"; pnlOpt.alignChildren = ["fill", "top"];
         pnlOpt.spacing = 6; pnlOpt.margins = [10, 15, 10, 10];
 
-        var chkCreateNuke     = pnlOpt.add("checkbox", undefined, "Create Nuke Scripts");  chkCreateNuke.value     = true;
+        // First row of Pipeline Options: Create Nuke Scripts checkbox on
+        // the left, with the small wrench tucked at the right edge to
+        // toggle the hidden Debug panel below the dialog. Sharing the
+        // row keeps the dialog compact.
+        var rNuke = pnlOpt.add("group");
+        rNuke.orientation = "row"; rNuke.alignChildren = ["fill", "center"]; rNuke.spacing = 4;
+        var chkCreateNuke     = rNuke.add("checkbox", undefined, "Create Nuke Scripts");
+        chkCreateNuke.value   = true;
+        chkCreateNuke.alignment = ["left", "center"];
+        var rNukeSpacer = rNuke.add("statictext", undefined, "");
+        rNukeSpacer.alignment = ["fill", "center"];
+        var btnDebugToggle = rNuke.add("button", undefined, "⚙");
+        btnDebugToggle.preferredSize = [28, 22];
+        btnDebugToggle.alignment = ["right", "center"];
+        btnDebugToggle.helpTip = "Debug toggles (Skip Render, Keep forward plate after bake) — diagnostic only.";
         var chkExportXML      = pnlOpt.add("checkbox", undefined, "Export Shot XML");    chkExportXML.value      = true;
         var chkCreateDynLink  = pnlOpt.add("checkbox", undefined, "Create dynamicLink Comps"); chkCreateDynLink.value = true;
         // Note: duplicate-shared-sources is a contextual choice — it only
@@ -293,13 +331,9 @@ NOTES
             if (picked) etShotsFolder.text = picked.fsName;
         };
 
-        var chkSkipRender     = pnlOpt.add("checkbox", undefined, "Skip Render (debug)");           chkSkipRender.value     = false;
         var chkFlatPlates     = pnlOpt.add("checkbox", undefined, "Flat Plate Folder (all plate.mov / reversed.mov in one bulk folder)");
         chkFlatPlates.value   = false;
-        chkFlatPlates.helpTip = "ON: write every shot's plate.mov and reversed.mov to a single {shots}/_plates/ folder (easier bulk denoise/grade). OFF: per-shot {shot}/plate/ + {shots}/_baked/ layout. The {shot}/render/ folder for VFX returns is unaffected either way, so Import Returns keeps working.";
-        var chkDebugKeepFwd   = pnlOpt.add("checkbox", undefined, "Debug — keep forward plate after bake");
-        chkDebugKeepFwd.value = false;
-        chkDebugKeepFwd.helpTip = "ON (debug): keep both the forward plate and the reversed bake in the stack so Switch Variant can A/B them. OFF (production): after a successful bake, the forward plate is removed from the stack, the project, and disk — only the reversed plate remains, so the artist has no doubt which to use.";
+        chkFlatPlates.helpTip = "ON: write every shot's plate.mov and reversed.mov to a single {shots}/_plates/ folder (easier bulk denoise/grade). OFF: per-shot {shot}/plate/ layout (bake sits next to the forward plate). The {shot}/render/ folder for VFX returns is unaffected either way, so Import Returns keeps working.";
 
         // ── Burnin Fields ──────────────────────────────
         // Populate the "Burnin Fields" precomp at roundtrip time so the
@@ -337,10 +371,59 @@ NOTES
         var etBurninAgency  = addBurninRow(pnlBurnin, "Agency:");
         var etBurninClient  = addBurninRow(pnlBurnin, "Client:");
 
+        // Debug panel (hidden by default; toggled via the wrench in the
+        // Pipeline Options row above). Toggles here change pipeline
+        // behaviour for diagnostic / A-B workflows — production runs
+        // leave these OFF.
+        var pnlDebug = dlg.add("panel", undefined, "Debug");
+        pnlDebug.orientation = "column"; pnlDebug.alignChildren = ["fill", "top"];
+        pnlDebug.spacing = 6; pnlDebug.margins = [10, 15, 10, 10];
+        // Start hidden + collapsed. ScriptUI's `visible=false` alone does
+        // NOT release a child's layout slot on macOS — the parent keeps
+        // reserving its full height — so we also clamp size to zero. The
+        // toggle below lifts the clamps to expose the natural size.
+        pnlDebug.visible       = false;
+        pnlDebug.maximumSize   = [0, 0];
+        pnlDebug.minimumSize   = [0, 0];
+        pnlDebug.preferredSize = [0, 0];
+
+        var chkSkipRender     = pnlDebug.add("checkbox", undefined, "Skip Render");
+        chkSkipRender.value   = false;
+        chkSkipRender.helpTip = "Build the comp structure without triggering a render. Use this to test comp setup without waiting for a render.";
+
+        var chkDebugKeepFwd   = pnlDebug.add("checkbox", undefined, "Keep forward plate after bake");
+        chkDebugKeepFwd.value = false;
+        chkDebugKeepFwd.helpTip = "ON: keep both the forward plate and the reversed bake in the stack so Switch Variant can A/B them. OFF (production): after a successful bake, the forward plate is removed from the stack, the project, and disk — only the reversed plate remains, so the artist has no doubt which to use.";
+
+        // dbgPref caches the panel's natural size after the first expand
+        // so re-collapsing then re-expanding doesn't need to re-measure.
+        var dbgPref = null;
+        btnDebugToggle.onClick = function () {
+            var show = !pnlDebug.visible;
+            if (show) {
+                pnlDebug.maximumSize   = [10000, 10000];
+                pnlDebug.minimumSize   = [1, 1];
+                pnlDebug.preferredSize = dbgPref ? dbgPref : [-1, -1];
+                pnlDebug.visible       = true;
+            } else {
+                pnlDebug.visible       = false;
+                pnlDebug.maximumSize   = [0, 0];
+                pnlDebug.minimumSize   = [0, 0];
+                pnlDebug.preferredSize = [0, 0];
+            }
+            try {
+                dlg.layout.layout(true);
+                if (show && !dbgPref) {
+                    try { dbgPref = [pnlDebug.size[0], pnlDebug.size[1]]; } catch (eP) {}
+                }
+                dlg.size = [dlg.preferredSize[0], dlg.preferredSize[1]];
+            } catch (eL) {}
+        };
+
 
 
         // ── Settings persistence ───────────────────────
-        // All fields except chkSkipRender (debug) round-trip through
+        // All fields except chkSkipRender round-trip through
         // app.settings so the dialog remembers last-used values. Reset to
         // Defaults populates the hardcoded defaults in-place; changes only
         // persist when the user clicks Run Roundtrip.
@@ -357,7 +440,7 @@ NOTES
             sharedSourceMode:  "separate",
             overscan:      "10",
             omTemplate:    "ProRes 422 HQ",
-            shotsFolder:   "/Roundtrip",
+            shotsFolder:   "./Roundtrip",
             // Burnin fields — empty project falls back to the .aep filename
             // stem at apply-time (see srApply). Company seeded to "Gegenschuss".
             burninEnabled:  "true",
@@ -506,7 +589,7 @@ NOTES
         function reportError(phase, e, hint) {
             var msg = "Error in " + phase + " Phase:\n" + e.message + "\nLine: " + e.line;
             if (hint) msg += "\n\n" + hint;
-            alert(msg);
+            greyAlert("Shot Roundtrip", msg);
         }
 
         // Non-modal progress palette so the user can tell the script is still
@@ -665,7 +748,7 @@ NOTES
                 next++;
             }
             if (!newFile) {
-                alert("Shot Roundtrip: could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
+                greyAlert("Shot Roundtrip", "Could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
                 return null;
             }
             try {
@@ -675,7 +758,7 @@ NOTES
                 proj.save();
                 proj.save(newFile);
             } catch (eSave) {
-                alert("Shot Roundtrip: failed to save versioned copy —\n" + eSave.message +
+                greyAlert("Shot Roundtrip", "Failed to save versioned copy —\n" + eSave.message +
                       "\n\nAborting so the original file stays untouched.");
                 return null;
             }
@@ -1128,9 +1211,19 @@ NOTES
             return result;
         }
 
-        // Recursively searches comp for ALL footage layers anywhere in the hierarchy.
-        // No time filtering — finds every footage file regardless of which frames are
-        // currently visible. Returns { footageLayer, footageComp, breadcrumb, layerChain }.
+        // Recursively searches comp for footage layers, optionally filtered by a
+        // visible-time window in the CURRENT comp's local time.
+        //
+        // When `win` is null, every footage file under comp is returned (legacy behavior).
+        // When `win = { start, end }` is supplied, only layers whose [inPoint, outPoint]
+        // overlaps [start, end] are considered, and recursion into sub-precomps projects
+        // the window through the sub-precomp layer via mapTimeToSource so the filter
+        // tracks what's actually visible at every depth. This is what keeps
+        // Premiere "Replace with AE Comp" precomps (one giant precomp containing
+        // dozens of source clips, with the outer layer's in/out exposing only one
+        // cut) from exploding into one shot per inner clip.
+        //
+        // Returns { footageLayer, footageComp, breadcrumb, layerChain }.
         //
         // layerChain holds the precomp LAYERS encountered between the caller's starting
         // comp and the footage's immediate parent, outer-to-inner. Used by the expansion
@@ -1144,18 +1237,43 @@ NOTES
         //             └─ footage.mov            ← footageLayer, footageComp = B
         //
         // For footage directly inside the selected precomp, layerChain is empty.
-        function findAllFootageInPrecomp(comp, path, layerChain) {
+        function findAllFootageInPrecomp(comp, path, layerChain, win) {
             var currentPath  = (path       || []).concat([comp.name]);
             var currentChain =  layerChain || [];
             var results = [];
+            // Tiny epsilon so a layer that ends EXACTLY at winStart (touching but
+            // not overlapping) is excluded; AE in/out rounding can also leave a
+            // sub-frame seam that we don't want to count as visible.
+            var EPS = 1e-6;
             for (var li = 1; li <= comp.numLayers; li++) {
                 var l = comp.layer(li);
                 if (!l.hasVideo || l.guideLayer || l.adjustmentLayer || l.nullLayer) continue;
+                // Skip disabled layers — Premiere "Replace with AE Comp" precomps
+                // typically leave the alternate cuts of every clip on the timeline
+                // with enabled=false, which is what kept producing dozens of
+                // "Sync > C23xx.mp4" / "Sync > 221_xxxx.mxf" ghost shots even
+                // after the visible-window filter pruned the obvious cases.
+                // A disabled layer can't contribute pixels to the render, so it
+                // can't be a roundtrip shot.
+                if (!l.enabled) continue;
                 if (l.source === null) continue;
+                if (win) {
+                    var lIn  = 0, lOut = 0;
+                    try { lIn  = l.inPoint;  } catch (eLI) {}
+                    try { lOut = l.outPoint; } catch (eLO) {}
+                    if (lOut <= win.start + EPS || lIn >= win.end - EPS) continue;
+                }
                 // Footage file?
                 var isFile = false;
                 try { if (l.source.mainSource && l.source.mainSource.file) isFile = true; } catch(e) {}
                 if (isFile) {
+                    // Skip stills (PNG / JPG / EPS / PDF / etc). FootageItem.duration
+                    // is 0 for stills and solids; we only want video-bearing
+                    // file footage as roundtrip shots. Logos, safezones, and
+                    // graphic overlays don't need plates rendered.
+                    var srcDur = 0;
+                    try { srcDur = l.source.duration || 0; } catch (eSD) {}
+                    if (srcDur <= 0) continue;
                     results.push({
                         footageLayer: l,
                         footageComp:  comp,
@@ -1164,8 +1282,30 @@ NOTES
                     });
                 } else if (l.source instanceof CompItem) {
                     // Sub-precomp: recurse and extend the chain with THIS precomp layer,
-                    // since future time mappings have to travel through it.
-                    var sub = findAllFootageInPrecomp(l.source, currentPath, currentChain.concat([l]));
+                    // since future time mappings have to travel through it. When a
+                    // window is active, project it through this layer (clipped to the
+                    // layer's own in/out, then mapped to source) so the recursion
+                    // only sees the slice of the sub-precomp that's actually visible.
+                    var subWin = null;
+                    if (win) {
+                        var clipIn  = win.start;
+                        var clipOut = win.end;
+                        try {
+                            if (l.inPoint  > clipIn)  clipIn  = l.inPoint;
+                            if (l.outPoint < clipOut) clipOut = l.outPoint;
+                        } catch (eClip) {}
+                        if (clipOut > clipIn + EPS) {
+                            var sA = clipIn, sB = clipOut;
+                            try { sA = mapTimeToSource(l, clipIn);  } catch (eMA) {}
+                            try { sB = mapTimeToSource(l, clipOut); } catch (eMB) {}
+                            subWin = { start: Math.min(sA, sB), end: Math.max(sA, sB) };
+                        } else {
+                            // Sub-precomp layer doesn't overlap the visible window
+                            // at all — already filtered above, but guard anyway.
+                            continue;
+                        }
+                    }
+                    var sub = findAllFootageInPrecomp(l.source, currentPath, currentChain.concat([l]), subWin);
                     for (var si = 0; si < sub.length; si++) results.push(sub[si]);
                 }
             }
@@ -1456,6 +1596,84 @@ NOTES
             return false;
         }
 
+        // Walk the chain and accumulate Z-axis rotation across every layer
+        // from master down to footage. The returned `snapDeg` is the
+        // cleanly-orthogonal value the shot will be built around (-90 / 0 /
+        // 90 / 180); `axisSwap` is true for ±90 (shot_comp dimensions get
+        // swapped so the rendered orientation is preserved). Edge cases
+        // surface via three flags so the caller can show a warning rather
+        // than silently producing the wrong plate:
+        //   - animated  : at least one layer has a keyframed rotation
+        //   - threeD    : a 3D layer has non-zero X/Y rotation or orientation
+        //   - nonOrtho  : net rotation isn't within TOL of 0/±90/180
+        // For the edge-case cases, snapDeg falls back to 0 (no rotation
+        // applied, no axis swap) — the user has to fix it manually after,
+        // but we don't make it worse by guessing.
+        function analyseChainRotation(chain) {
+            var net      = 0;
+            var animated = false;
+            var threeD   = false;
+            for (var ri = 0; ri < chain.length; ri++) {
+                var L = chain[ri];
+                if (!L) continue;
+                try {
+                    var is3D = false;
+                    try { is3D = !!L.threeDLayer; } catch (e3DL) {}
+                    if (is3D) {
+                        try {
+                            var rxP = L.property("ADBE Rotate X");
+                            var ryP = L.property("ADBE Rotate Y");
+                            if ((rxP && rxP.value && rxP.value !== 0) ||
+                                (ryP && ryP.value && ryP.value !== 0)) threeD = true;
+                            if ((rxP && rxP.numKeys > 1) || (ryP && ryP.numKeys > 1)) animated = true;
+                        } catch (e3DR) {}
+                        try {
+                            var orientP = L.property("ADBE Orientation");
+                            if (orientP) {
+                                var ov = orientP.value;
+                                if (ov && (ov[0] !== 0 || ov[1] !== 0)) threeD = true;
+                                if (ov) net += (ov[2] || 0);
+                                if (orientP.numKeys > 1) animated = true;
+                            }
+                        } catch (eOri) {}
+                    }
+                    var rotProp = null;
+                    try { rotProp = L.property("ADBE Rotate Z"); } catch (eRZ) {}
+                    if (!rotProp) {
+                        try { rotProp = L.property("Rotation"); } catch (eRot) {}
+                    }
+                    if (rotProp) {
+                        try { if (rotProp.numKeys > 1) animated = true; } catch (eNK) {}
+                        try { net += (rotProp.value || 0); } catch (eRV) {}
+                    }
+                } catch (eL) {}
+            }
+            // Normalize into (-180, 180].
+            while (net >  180) net -= 360;
+            while (net <= -180) net += 360;
+            var TOL = 1.0; // degrees of slop allowed around each cardinal
+            var snapDeg  = 0;
+            var axisSwap = false;
+            var nonOrtho = false;
+            if      (Math.abs(net)        <= TOL) snapDeg = 0;
+            else if (Math.abs(net -  90)  <= TOL) { snapDeg =  90; axisSwap = true; }
+            else if (Math.abs(net +  90)  <= TOL) { snapDeg = -90; axisSwap = true; }
+            else if (Math.abs(net - 180)  <= TOL || Math.abs(net + 180) <= TOL) snapDeg = 180;
+            else { nonOrtho = true; snapDeg = 0; axisSwap = false; }
+            // Animated / 3D rotations win over snap — fall back to identity
+            // and emit the warning so the user fixes manually rather than
+            // shipping a plate that loses the rotation curve.
+            if (animated || threeD) { snapDeg = 0; axisSwap = false; }
+            return {
+                netDeg:   net,
+                snapDeg:  snapDeg,
+                axisSwap: axisSwap,
+                animated: animated,
+                threeD:   threeD,
+                nonOrtho: nonOrtho
+            };
+        }
+
         function buildShotPlan(masterLayer, planHandleFrames, mainCompFrameRate, mainCompDur) {
             var walked = walkChainToFootage(masterLayer);
             if (!walked) return null;
@@ -1618,7 +1836,7 @@ NOTES
             nk += "Viewer {\n inputs 0\n viewerProcess \"rec709\"\n name Viewer1\n xpos " + masterX + "\n ypos " + (masterY + 600) + "\n}\n";
 
             if (!nukeFile.open("w")) {
-                alert("Failed to write master Nuke script:\n" + nukeFile.fsName + "\n\nCheck folder permissions and free disk space.");
+                greyAlert("Shot Roundtrip", "Failed to write master Nuke script:\n" + nukeFile.fsName + "\n\nCheck folder permissions and free disk space.");
                 return;
             }
             nukeFile.write(nk);
@@ -1697,7 +1915,7 @@ NOTES
             nk += "Viewer {\n inputs 0\n viewerProcess \"rec709\"\n name Viewer1\n xpos 200\n ypos 1200\n}\n";
 
             if (!shotFile.open("w")) {
-                alert("Failed to write per-shot Nuke script:\n" + shotFile.fsName + "\n\nCheck folder permissions and free disk space.");
+                greyAlert("Shot Roundtrip", "Failed to write per-shot Nuke script:\n" + shotFile.fsName + "\n\nCheck folder permissions and free disk space.");
                 return;
             }
             shotFile.write(nk);
@@ -2102,6 +2320,15 @@ NOTES
                 }
                 var eItem = selLayersIn[ei];
                 if (!eItem.isPrecomp) {
+                    // Skip stills (PNG / JPG / EPS / PDF / solids etc) — only
+                    // video footage gets a plate. FootageItem.duration is 0
+                    // for any non-video source.
+                    var directDur = 0;
+                    try { directDur = (eItem.layer.source && eItem.layer.source.duration) || 0; } catch (eDD) {}
+                    if (directDur <= 0) {
+                        skippedLayersIn.push(eItem.layer.name + " (still / non-video footage)");
+                        continue;
+                    }
                     out.push({
                         layer: eItem.layer, mainLayerIdx: eItem.layer.index, isPrecomp: false, found: null, totalInPrecomp: 0,
                         // Snapshot the source id NOW, before any replaceSource runs later in the
@@ -2110,7 +2337,19 @@ NOTES
                         originalSourceId: (eItem.layer.source && eItem.layer.source.id) ? eItem.layer.source.id : null
                     });
                 } else {
-                    var eFounds = findAllFootageInPrecomp(eItem.layer.source);
+                    // Project the outer layer's visible mainComp window into the
+                    // selected precomp's local time, so the recursion only surfaces
+                    // footage that's ACTUALLY visible through this cut. Without
+                    // this, a Premiere "Replace with AE Comp" precomp (one comp
+                    // containing every source clip on a track) explodes into one
+                    // shot per inner clip even though the outer layer only exposes
+                    // a single cut.
+                    var winA = eItem.layer.inPoint;
+                    var winB = eItem.layer.outPoint;
+                    try { winA = mapTimeToSource(eItem.layer, eItem.layer.inPoint);  } catch (eWA) {}
+                    try { winB = mapTimeToSource(eItem.layer, eItem.layer.outPoint); } catch (eWB) {}
+                    var visWin = { start: Math.min(winA, winB), end: Math.max(winA, winB) };
+                    var eFounds = findAllFootageInPrecomp(eItem.layer.source, undefined, undefined, visWin);
                     if (eFounds.length === 0) {
                         skippedLayersIn.push(eItem.layer.name + " (no footage found inside precomp)");
                     } else {
@@ -2312,7 +2551,7 @@ NOTES
         if (expandedLayers.length === 0) {
             var msg = "Keine gültigen Layer gefunden.";
             if (skippedLayers.length > 0) msg += "\n" + skippedLayers.length + " Layer wurden übersprungen.";
-            alert(msg); progress.close(); return;
+            greyAlert("Shot Roundtrip", msg); progress.close(); return;
         }
 
         // Cross-selection shared-source detection. An expandedLayers entry
@@ -2437,10 +2676,12 @@ NOTES
         var confTotalFrames = 0;
         var confNameMaxLen   = 0;
         var confFramesMaxLen = 0;
+        var confLengthMaxLen = 0;
         var confResMaxLen    = 0;
         var confNoticeMaxLen = 0;
         var confPathMaxLen   = 0;
         var confBakeMaxLen   = 0;
+        var confRotMaxLen    = 0;
 
         // Resolves whether a given AVLayer is in the user's bake-marked
         // set. Linear scan — at most a handful of entries in practice.
@@ -2507,7 +2748,16 @@ NOTES
             }
 
             var cfFrames = "" + cfCutFrames;
-            var cfRes    = (cfSrcW > 0) ? (cfSrcW + "\u00d7" + cfSrcH) : "";
+            // Length column: cut duration formatted as M:SS so the user can
+            // read shot lengths without doing fps-math in their head.
+            // Seconds are floored, then padded to two digits \u2014 a 1-frame
+            // shot reads "0:00", anything from 1.0s reads "0:01" upward.
+            var cfLengthSec   = (cfFps > 0) ? (cfCutFrames / cfFps) : 0;
+            var cfLengthMin   = Math.floor(cfLengthSec / 60);
+            var cfLengthRemSI = Math.floor(cfLengthSec - cfLengthMin * 60);
+            var cfLengthRemS  = (cfLengthRemSI < 10 ? "0" : "") + cfLengthRemSI;
+            var cfLength      = cfLengthMin + ":" + cfLengthRemS;
+            var cfRes         = (cfSrcW > 0) ? (cfSrcW + "\u00d7" + cfSrcH) : "";
 
             // Notice column: fps mismatch + time-effect tags + shared-source
             // tag. Reversed effects are already surfaced via the loud dialog
@@ -2522,7 +2772,29 @@ NOTES
             if (cfItem.originalSourceId && sharedGroups[cfItem.originalSourceId]) {
                 cfNoticeParts.push("[shared source]");
             }
+
+            // Rotation analysis: walk the chain (master → footage) and read
+            // accumulated z-rotation. axisSwap shots get sized in rendered
+            // orientation (e.g. 1920×1080 source rotated 90° → 1080×1920
+            // shot_comp / plate.mov). Edge cases (animated rotation, 3D
+            // rotation, non-orthogonal angles) surface as warnings so the
+            // user knows the auto-fix didn't apply and they need to handle
+            // it manually. The auto-detected value seeds rotateOverride;
+            // the user can cycle the per-row override via the Toggle
+            // Rotate button.
+            var cfChain = cfItem.isPrecomp
+                ? [cfItem.layer].concat(cfItem.found.layerChain || []).concat([cfItem.found.footageLayer])
+                : [cfItem.layer];
+            var cfRot = analyseChainRotation(cfChain);
+            cfItem.rotateAuto = cfRot.snapDeg;
+            if (typeof cfItem.rotateOverride === "undefined") cfItem.rotateOverride = null;
+            if (cfRot.animated) cfNoticeParts.push("[rotation: animated — manual]");
+            if (cfRot.threeD)   cfNoticeParts.push("[rotation: 3D — manual]");
+            if (cfRot.nonOrtho) cfNoticeParts.push("[rotation: " + Math.round(cfRot.netDeg) + "° — manual]");
+
             var cfNotice = cfNoticeParts.join("  ");
+            var cfEffRot = (cfItem.rotateOverride !== null) ? cfItem.rotateOverride : cfRot.snapDeg;
+            var cfRotCell = (cfEffRot === 0) ? "" : (cfEffRot + "°");
 
             // Bake column: summarize the user's per-layer Bake choices from
             // the reversal warning dialog for this shot. Empty when the
@@ -2541,17 +2813,24 @@ NOTES
             else                                         cfBake = cfBakeBaked + "/" + cfBakeTotal;
 
             var cfOsMark = cfItem.overscan ? "\u2715" : "";
-            confRows.push({ cols: [cfName, cfFrames, cfRes, cfNotice, cfPath, cfOsMark, cfBake], layerIdx: cfi });
+            confRows.push({
+                cols:      [cfName, cfFrames, cfLength, cfRes, cfNotice, cfPath, cfOsMark, cfBake, cfRotCell],
+                layerIdx:  cfi,
+                lenFrames: cfCutFrames, // numeric companion to the Length string for sorting
+                rotDeg:    cfEffRot     // numeric companion to the Rotate string for sorting
+            });
             if (cfName.length   > confNameMaxLen)   confNameMaxLen   = cfName.length;
             if (cfFrames.length > confFramesMaxLen) confFramesMaxLen = cfFrames.length;
+            if (cfLength.length > confLengthMaxLen) confLengthMaxLen = cfLength.length;
             if (cfRes.length    > confResMaxLen)    confResMaxLen    = cfRes.length;
             if (cfNotice.length > confNoticeMaxLen) confNoticeMaxLen = cfNotice.length;
             if (cfPath.length   > confPathMaxLen)   confPathMaxLen   = cfPath.length;
             if (cfBake.length   > confBakeMaxLen)   confBakeMaxLen   = cfBake.length;
+            if (cfRotCell.length > confRotMaxLen)   confRotMaxLen   = cfRotCell.length;
         }
         } catch (eConfRows) {
             try { progress.close(); } catch(eCl){}
-            alert("Preparing Confirm Shots dialog failed at row " + (typeof cfi === "number" ? (cfi + 1) : "?") + ":\n\n" +
+            greyAlert("Shot Roundtrip", "Preparing Confirm Shots dialog failed at row " + (typeof cfi === "number" ? (cfi + 1) : "?") + ":\n\n" +
                   eConfRows.message + "\nLine: " + eConfRows.line);
             return;
         }
@@ -2562,13 +2841,15 @@ NOTES
 
         var confColShot   = Math.max(confNameMaxLen   * 9 + 24, 80);
         var confColFrames = Math.max(confFramesMaxLen * 8 + 16, 60);
+        var confColLength = Math.max(confLengthMaxLen * 8 + 16, 60);
         var confColRes    = Math.max(confResMaxLen    * 8 + 16, 90);
         var confColNotice = Math.max(confNoticeMaxLen * 7 + 16, 80);
         var confColOs     = 120; // width fits "Overscan Toggle" header
         var confColBake   = Math.max(confBakeMaxLen   * 8 + 24, 70); // "Bake" column
+        var confColRot    = Math.max(confRotMaxLen    * 8 + 24, 100); // "Rotate Toggle" header
         var confColSource = Math.max(confPathMaxLen   * 8 + 24, 260);
         // Source column gets whatever space remains after the fixed columns.
-        var confFixedW = confColShot + confColFrames + confColRes + confColNotice + confColOs + confColBake + 60;
+        var confFixedW = confColShot + confColFrames + confColLength + confColRes + confColNotice + confColOs + confColBake + confColRot + 60;
         confColSource  = Math.min(confColSource, maxDlgW - confFixedW);
         confColSource  = Math.max(confColSource, 260);
         var confDlgW   = Math.min(confFixedW + confColSource, maxDlgW);
@@ -2602,10 +2883,25 @@ NOTES
         function confSortRows() {
             if (confSortKey < 0) return;
             confRows.sort(function (a, b) {
+                // Length column (index 2) sorts by the numeric companion
+                // `lenFrames` so "10:00" doesn't sort before "2:00" the way
+                // a string compare would.
+                if (confSortKey === 2) {
+                    var aL = a.lenFrames || 0, bL = b.lenFrames || 0;
+                    if (aL !== bL) return (aL < bL ? -1 : 1) * confSortDir;
+                    return 0;
+                }
+                // Rotate column (index 8) sorts by numeric rotDeg so "-90°"
+                // sorts before "0°" sorts before "90°" sorts before "180°".
+                if (confSortKey === 8) {
+                    var aR = a.rotDeg || 0, bR = b.rotDeg || 0;
+                    if (aR !== bR) return (aR < bR ? -1 : 1) * confSortDir;
+                    return 0;
+                }
                 var av = a.cols[confSortKey], bv = b.cols[confSortKey];
-                // Frames and Res columns parse to numbers when possible so
+                // Frames (1) and Res (3) parse to numbers when possible so
                 // "1000" sorts after "500" instead of alphabetically.
-                if (confSortKey === 1 || confSortKey === 2) {
+                if (confSortKey === 1 || confSortKey === 3) {
                     var an = parseFloat(av), bn = parseFloat(bv);
                     if (!isNaN(an) && !isNaN(bn)) {
                         if (an !== bn) return (an < bn ? -1 : 1) * confSortDir;
@@ -2620,7 +2916,7 @@ NOTES
         confSortRow.orientation = "row"; confSortRow.alignChildren = ["left", "center"];
         confSortRow.spacing = 4;
         confSortRow.add("statictext", undefined, "Sort:");
-        var CONF_LABELS = ["Shot", "Frames", "Res", "Notice", "Source", "Overscan", "Bake"];
+        var CONF_LABELS = ["Shot", "Frames", "Length", "Res", "Notice", "Source", "Overscan", "Bake", "Rotate"];
         var confBtns = [];
         for (var cs = 0; cs < CONF_LABELS.length; cs++) {
             var cb = confSortRow.add("button", undefined, CONF_LABELS[cs]);
@@ -2645,10 +2941,10 @@ NOTES
 
         var confLB = shotsPnl.add("listbox", undefined, [], {
             multiselect: true,
-            numberOfColumns: 7,
+            numberOfColumns: 9,
             showHeaders: true,
-            columnTitles: ["Shot", "Frames", "Res", "Notice", "Source", "Overscan Toggle", "Bake"],
-            columnWidths: [confColShot, confColFrames, confColRes, confColNotice, confColSource, confColOs, confColBake]
+            columnTitles: ["Shot", "Frames", "Length", "Res", "Notice", "Source", "Overscan Toggle", "Bake", "Rotate Toggle"],
+            columnWidths: [confColShot, confColFrames, confColLength, confColRes, confColNotice, confColSource, confColOs, confColBake, confColRot]
         });
         var confLBH = Math.max(confRows.length * 22 + 40, 200);
         confLBH = Math.min(confLBH, 600);
@@ -2658,11 +2954,13 @@ NOTES
             for (var cfi = 0; cfi < confRows.length; cfi++) {
                 var cfRow = confLB.add("item", confRows[cfi].cols[0]);
                 cfRow.subItems[0].text = confRows[cfi].cols[1]; // frames
-                cfRow.subItems[1].text = confRows[cfi].cols[2]; // res
-                cfRow.subItems[2].text = confRows[cfi].cols[3]; // notice
-                cfRow.subItems[3].text = confRows[cfi].cols[4]; // source
-                cfRow.subItems[4].text = confRows[cfi].cols[5]; // os
-                cfRow.subItems[5].text = confRows[cfi].cols[6]; // bake
+                cfRow.subItems[1].text = confRows[cfi].cols[2]; // length
+                cfRow.subItems[2].text = confRows[cfi].cols[3]; // res
+                cfRow.subItems[3].text = confRows[cfi].cols[4]; // notice
+                cfRow.subItems[4].text = confRows[cfi].cols[5]; // source
+                cfRow.subItems[5].text = confRows[cfi].cols[6]; // os
+                cfRow.subItems[6].text = confRows[cfi].cols[7]; // bake
+                cfRow.subItems[7].text = confRows[cfi].cols[8]; // rotate
             }
         }
         confRepopulate();
@@ -2691,14 +2989,22 @@ NOTES
                 "Shared sources: " + sharedRecapParts.join(", ") + ".");
         }
 
-        // Footer + toggle button
-        var confFooterTxt = "Total: " + confTotalFrames + "  (" + (Math.round(confTotalFrames / cfFps * 10) / 10) + "s)   handles: " + handleFrames;
+        // Footer + toggle button. Total length renders as M:SS so it lines
+        // up with the Length column above; seconds floored, leading-zero
+        // padded ("17:07" not "17:7").
+        var confTotalSec   = (cfFps > 0) ? (confTotalFrames / cfFps) : 0;
+        var confTotalMin   = Math.floor(confTotalSec / 60);
+        var confTotalRemSI = Math.floor(confTotalSec - confTotalMin * 60);
+        var confTotalRemS  = (confTotalRemSI < 10 ? "0" : "") + confTotalRemSI;
+        var confFooterTxt = "Total: " + confTotalFrames + " frames  (" + confTotalMin + ":" + confTotalRemS + ")   handles: " + handleFrames;
         confDlg.add("statictext", undefined, confFooterTxt);
 
         var confBtnGrp = confDlg.add("group");
         confBtnGrp.orientation = "row"; confBtnGrp.alignment = ["fill", "bottom"];
         var confSpacer  = confBtnGrp.add("statictext", undefined, ""); confSpacer.alignment = ["fill", "center"];
-        var confToggleOs = confBtnGrp.add("button", undefined, "Toggle Overscan"); confToggleOs.preferredSize = [130, 28];
+        var confToggleOs   = confBtnGrp.add("button", undefined, "Toggle Overscan"); confToggleOs.preferredSize  = [130, 28];
+        var confToggleRot  = confBtnGrp.add("button", undefined, "Toggle Rotate");  confToggleRot.preferredSize = [120, 28];
+        confToggleRot.helpTip = "Cycle the selected row(s) through 0° → 90° → 180° → -90°. (Hotkey: R)";
         var confCancel  = confBtnGrp.add("button", undefined, "Cancel");  confCancel.preferredSize  = [80,  28];
         var confOk      = confBtnGrp.add("button", undefined, "Process"); confOk.preferredSize      = [110, 28];
 
@@ -2714,7 +3020,7 @@ NOTES
                 var ri = confRows[selIndices[si]];
                 if (ri.layerIdx < 0) continue;
                 expandedLayers[ri.layerIdx].overscan = !expandedLayers[ri.layerIdx].overscan;
-                confLB.items[selIndices[si]].subItems[4].text = expandedLayers[ri.layerIdx].overscan ? "\u2715" : "";
+                confLB.items[selIndices[si]].subItems[5].text = expandedLayers[ri.layerIdx].overscan ? "\u2715" : "";
             }
             // Force ScriptUI to repaint the listbox — it won't update subItem text
             // while items are selected, so briefly clear and restore selection.
@@ -2728,6 +3034,47 @@ NOTES
                 if (e.keyName === "X") { e.preventDefault(); toggleOverscanSelection(); }
             });
         } catch(eKD) {}
+
+        // Cycle each selected row's rotate override through the four
+        // orthogonal values (0 → 90 → 180 → -90 → 0). Override > auto-detect
+        // in the main loop, so the user can correct any miss the chain
+        // walker made.
+        var ROT_CYCLE = [0, 90, 180, -90];
+        function rotCycleNext(cur) {
+            for (var rci = 0; rci < ROT_CYCLE.length; rci++) {
+                if (ROT_CYCLE[rci] === cur) return ROT_CYCLE[(rci + 1) % ROT_CYCLE.length];
+            }
+            return 90; // unknown current value falls into 90°
+        }
+        function toggleRotateSelection() {
+            var sel = confLB.selection;
+            if (!sel) return;
+            var selArr = (sel.length !== undefined) ? sel : [sel];
+            var selIndices = [];
+            for (var si = 0; si < selArr.length; si++) selIndices.push(selArr[si].index);
+            for (var si = 0; si < selIndices.length; si++) {
+                var ri = confRows[selIndices[si]];
+                if (ri.layerIdx < 0) continue;
+                var rItem = expandedLayers[ri.layerIdx];
+                var cur  = (rItem.rotateOverride !== null && rItem.rotateOverride !== undefined)
+                         ? rItem.rotateOverride
+                         : (rItem.rotateAuto || 0);
+                var next = rotCycleNext(cur);
+                rItem.rotateOverride = next;
+                ri.rotDeg = next;
+                ri.cols[8] = (next === 0) ? "" : (next + "°");
+                confLB.items[selIndices[si]].subItems[7].text = ri.cols[8];
+            }
+            confLB.selection = null;
+            for (var si = 0; si < selIndices.length; si++) confLB.items[selIndices[si]].selected = true;
+        }
+        confToggleRot.onClick = toggleRotateSelection;
+        try {
+            confDlg.addEventListener("keydown", function(e) {
+                if (e.keyName === "R") { e.preventDefault(); toggleRotateSelection(); }
+            });
+        } catch(eKDR) {}
+
         confCancel.onClick = function() { confDlg.close(2); };
         confOk.onClick     = function() { confDlg.close(1); };
 
@@ -2774,7 +3121,7 @@ NOTES
                        ? new Folder(bakeShotsPathText)
                        : new Folder(bakeAepFolder.fsName + "/" + bakeShotsPathText);
         if (!fsBakeRoot.exists) fsBakeRoot.create();
-        if (!fsBakeRoot.exists) { alert("Could not create roundtrip folder:\n" + fsBakeRoot.fsName); progress.close(); return; }
+        if (!fsBakeRoot.exists) { greyAlert("Shot Roundtrip", "Could not create roundtrip folder:\n" + fsBakeRoot.fsName); progress.close(); return; }
 
         // Capture, for each reversed layer the user marked "Bake" in the
         // warning dialog, BOTH the source FootageItem (used for the
@@ -2909,7 +3256,7 @@ NOTES
                     ? new Folder(shotsPathText)
                     : new Folder(aepFolder.fsName + "/" + shotsPathText);
         if (!fsShots.exists) fsShots.create();
-        if (!fsShots.exists) { alert("Could not create shots folder:\n" + fsShots.fsName); progress.close(); return; }
+        if (!fsShots.exists) { greyAlert("Shot Roundtrip", "Could not create shots folder:\n" + fsShots.fsName); progress.close(); return; }
         var fsScripts = fsShots;
 
         // Scaffold the Roundtrip/ and _grade/ README.txt files so the
@@ -2996,13 +3343,41 @@ NOTES
                 var shotBin = getShotBin(binShots, shotName);
                 if (i === 0) stats.origWidth = source.width;
 
+                // ── Rotation analysis ─────────────────────────────────────────
+                // Walk the chain and accumulate net z-rotation. ±90° swaps
+                // shotComp / stackComp dimensions so the rendered orientation
+                // matches what mainComp shows (vertical-shot Sony FX video
+                // pinned 90° in mainComp → vertical plate.mov, not a stuffed
+                // horizontal one). Edge cases (animated, 3D, non-orthogonal)
+                // already surfaced as Confirm-Shots warnings — here we just
+                // skip the auto-rotate and use raw source dimensions.
+                //
+                // The user can override the auto-detected value per row via
+                // the "Toggle Rotate" button in Confirm Shots; that override
+                // wins over the chain walker.
+                var planRot = analyseChainRotation(plan.chain);
+                var effRotDeg = (item.rotateOverride !== null && item.rotateOverride !== undefined)
+                              ? item.rotateOverride
+                              : planRot.snapDeg;
+                planRot = {
+                    netDeg:   effRotDeg,
+                    snapDeg:  effRotDeg,
+                    axisSwap: (Math.abs(effRotDeg) === 90),
+                    animated: planRot.animated,
+                    threeD:   planRot.threeD,
+                    nonOrtho: planRot.nonOrtho
+                };
+
                 // ── Overscan sizing ────────────────────────────────────────────
                 var shotOverscan = (item.overscan && overscanPercent > 0) ? overscanPercent : 0;
-                var osWidth = source.width; var osHeight = source.height;
+                var srcW = source.width;
+                var srcH = source.height;
+                if (planRot.axisSwap) { var swp = srcW; srcW = srcH; srcH = swp; }
+                var osWidth = srcW; var osHeight = srcH;
                 if (shotOverscan > 0) {
                     var f = 1 + (shotOverscan / 100);
-                    osWidth  = Math.ceil(source.width  * f);
-                    osHeight = Math.ceil(source.height * f);
+                    osWidth  = Math.ceil(srcW * f);
+                    osHeight = Math.ceil(srcH * f);
                     if (osWidth  % 2 !== 0) osWidth++;
                     if (osHeight % 2 !== 0) osHeight++;
                 }
@@ -3024,6 +3399,18 @@ NOTES
                 var plateInner = shotComp.layers.add(source);
                 plateInner.startTime = 0;
                 plateInner.position.setValue([osWidth / 2, osHeight / 2]);
+                // When the chain has a net ±90° rotation, the source's pixel
+                // dimensions are perpendicular to the rotated shotComp; rotate
+                // the layer to match so the locked guide layer at the bottom
+                // of the stack visually agrees with the rendered plate.mov.
+                // Anchor stays at source-center (default), so AE rotates
+                // around it and the layer's bounding box ends up flipped to
+                // shotComp's orientation.
+                if (planRot.axisSwap || planRot.snapDeg === 180) {
+                    try { plateInner.property("Rotation").setValue(planRot.snapDeg); } catch (eRotPI) {
+                        try { plateInner.property("ADBE Rotate Z").setValue(planRot.snapDeg); } catch (eRotPI2) {}
+                    }
+                }
 
                 // Plate range / cut bounds come from the shot plan in source-
                 // frame domain.  buildShotPlan already clamped to [0, srcDur]
@@ -3928,7 +4315,7 @@ NOTES
                 } else {
                     if (!waitForFile(ri.p, 20)) {
                         missingPlates.push(ri.n + " (plate not found — disk full or render failed?)");
-                        alert("Plate not found after render:\n" + ri.p.fsName + "\n\nDisk full or render failed?");
+                        greyAlert("Shot Roundtrip", "Plate not found after render:\n" + ri.p.fsName + "\n\nDisk full or render failed?");
                     } else {
                         readyToImport = true;
                     }
@@ -4290,7 +4677,7 @@ NOTES
             // For every selected layer whose current source is a CompItem
             // (precomps natively + direct footage that the main loop has
             // already wrapped into a _container), build a <source>_dynamicLink
-            // wrapper comp in /Shots/dynamicLink with duration exactly
+            // wrapper comp in /Shots/_dynamicLink with duration exactly
             // cut + 2×handleFrames. Uses the proven extend → wrap → contract
             // sequence so time-remap / time-stretch layers get correct source
             // offsets. Any handle time lost to comp-edge clamping is padded
@@ -4300,7 +4687,7 @@ NOTES
             var dynBuildSkips  = []; // verbose diagnostics for non-processed entries
             if (chkCreateDynLink.value && selLayers && selLayers.length > 0) {
                 progress.update("Building Dynamic Link wrappers\u2026", "0 of " + selLayers.length, 80);
-                var binDynLink = getShotBin(getBinFolder("Shots"), "dynamicLink");
+                var binDynLink = getShotBin(getBinFolder("Shots"), "_dynamicLink");
                 var handleSec  = handleFrames / mainComp.frameRate;
 
                 for (var dli = 0; dli < selLayers.length; dli++) {
@@ -4483,7 +4870,7 @@ NOTES
                     $.evalFile(xmlScript);
                     delete $.global.__shotRoundtripXMLDir;
                 } else {
-                    alert("Export Shot XML script not found:\n" + xmlScript.fsName);
+                    greyAlert("Shot Roundtrip", "Export Shot XML script not found:\n" + xmlScript.fsName);
                 }
             }
 

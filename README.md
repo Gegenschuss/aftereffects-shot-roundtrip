@@ -100,6 +100,11 @@ Every tool in this panel is a step in the same round trip:
 ```
 
 1. **Edit in Premiere**, move to After Effects once the edit is close to locked.
+   *Tip: before "Replace with After Effects Composition", flatten the timeline
+   in Premiere so each cut is one-clip-per-track. The roundtrip handles nested
+   Premiere linked comps via its visible-window filter, but a flattened source
+   produces a perfect one-to-one shot mapping with no shared-source preflight
+   to triage.*
 2. Select layers in the edit comp, run **Shot Roundtrip**. Plates render out with handles, optionally creating Nuke scripts, Shot XML, and Dynamic Link comps.
 3. **External work** — compositing in Nuke, tracking in SynthEyes, 3D in Houdini. Color grading in Resolve via the exported Shot XML.
 4. Run **Import Returns** to pull finished VFX *and* Resolve-graded renders back into the AE shot comps. Grades stack above VFX, VFX above plate — so the topmost enabled layer is always the most finished version.
@@ -172,7 +177,7 @@ work is underway. The pipeline is designed around this:
   (innermost), `{shotName}_inner2`, `{shotName}_inner3`, … — so the
   project panel reads shot-by-shot instead of keeping AE's auto-generated
   `"X.mov Comp 1"` names. All Dynamic Link wrappers land in
-  `/Shots/dynamicLink/`.
+  `/Shots/_dynamicLink/`.
 
   On disk, the `Roundtrip/` folder mirrors the project-panel layout: one
   folder per shot containing `plate/`, `render/`, plus the per-shot
@@ -197,6 +202,34 @@ work is underway. The pipeline is designed around this:
   shotComp. Only the visible portion of each layer is rendered, even
   when the footage is buried several precomps deep — a 2-second cut of
   a 2-minute clip only renders 2 seconds (+ handles).
+
+  **Visible-window scoping for Premiere "Replace with AE Comp" precomps.**
+  Premiere's "Replace with After Effects Composition" produces precomps
+  that contain every clip from the relevant track — a single linked
+  comp can hold dozens of source clips with the outer layer's
+  in/out exposing only one cut. The roundtrip projects the outer
+  layer's `[inPoint, outPoint]` into precomp-local time and only
+  walks inner layers whose own in/out actually overlaps that window
+  (recursively, at every depth, projected through each precomp's
+  stretch + time-remap). Disabled layers are skipped entirely (Premiere
+  parks the alternate cuts of every clip on the timeline disabled), and
+  stills (PNG / JPG / EPS / PDF / solids — anything with
+  `source.duration === 0`) drop out too, since they don't need plates
+  rendered. One Premiere-style cut → one shot, not one shot per inner
+  clip.
+
+  **Auto-rotate for vertical / portrait sources.** A 1920×1080 horizontal
+  source pinned 90° in mainComp renders as 1080×1920 vertical — the
+  shot comp / stack / plate.mov should match the rendered orientation,
+  not the raw source pixels. The roundtrip walks the chain and
+  accumulates net z-rotation; when it lands on ±90°, `shot_NNN_comp`
+  and `shot_NNN_stack` are sized in rendered orientation and the inner
+  guide layer is rotated to fit. Edge cases (animated rotation, 3D
+  rotation, non-orthogonal angles) surface as warnings in the Confirm
+  Shots Notice column and fall back to identity so they don't ship a
+  broken plate. Per-row override via the **Toggle Rotate** button (or
+  `R` hotkey) cycles selected rows through `0° → 90° → 180° → -90°`,
+  which wins over the auto-detected value for the affected shots.
 
   <img src="docs/roundtrip_settings.png" width="340" alt="Shot Roundtrip settings dialog">
 

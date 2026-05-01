@@ -30,9 +30,32 @@
 
 (function () {
 
+    // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+    // dark panel theme instead of the macOS system alert with the Ae app
+    // icon slapped on top.
+    function greyAlert(title, msg) {
+        var dlg = new Window("dialog", title);
+        dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+        dlg.spacing = 10; dlg.margins = 14;
+        var p = dlg.add("panel", undefined, "");
+        p.orientation = "column"; p.alignChildren = ["fill", "top"];
+        p.margins = [12, 12, 12, 12]; p.spacing = 4;
+        var lines = String(msg).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            p.add("statictext", undefined, lines[i]);
+        }
+        var bg = dlg.add("group");
+        bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+        bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+        var ok = bg.add("button", undefined, "OK", { name: "ok" });
+        ok.preferredSize = [90, 28];
+        ok.onClick = function () { dlg.close(1); };
+        dlg.show();
+    }
+
     if (!app.project || !app.project.activeItem ||
         !(app.project.activeItem instanceof CompItem)) {
-        alert("Open a comp first, then run this script.");
+        greyAlert("Deep Inspect", "Open a comp first, then run this script.");
         return;
     }
     var topComp = app.project.activeItem;
@@ -736,6 +759,6 @@
     f.write(lines.join("\n"));
     f.close();
 
-    alert("Wrote " + lines.length + " lines:\n\n" + f.fsName +
+    greyAlert("Deep Inspect", "Wrote " + lines.length + " lines:\n\n" + f.fsName +
           "\n\nIncludes effects, expressions, transforms, layer markers, comp markers, source files, and a per-frame source-frame trace through every chain.");
 })();

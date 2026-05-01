@@ -50,8 +50,31 @@ Single undo step on OK.
 
 (function () {
 
+    // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+    // dark panel theme instead of the macOS system alert with the Ae app
+    // icon slapped on top.
+    function greyAlert(title, msg) {
+        var dlg = new Window("dialog", title);
+        dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+        dlg.spacing = 10; dlg.margins = 14;
+        var p = dlg.add("panel", undefined, "");
+        p.orientation = "column"; p.alignChildren = ["fill", "top"];
+        p.margins = [12, 12, 12, 12]; p.spacing = 4;
+        var lines = String(msg).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            p.add("statictext", undefined, lines[i]);
+        }
+        var bg = dlg.add("group");
+        bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+        bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+        var ok = bg.add("button", undefined, "OK", { name: "ok" });
+        ok.preferredSize = [90, 28];
+        ok.onClick = function () { dlg.close(1); };
+        dlg.show();
+    }
+
     var proj = app.project;
-    if (!proj) { alert("Select Version: open a project first."); return; }
+    if (!proj) { greyAlert("Select Version", "Open a project first."); return; }
 
     // ── Collect shots + their footage-precomp variants ───────────────────────
     var SHOT_REGEX    = /_comp(_OS)?$/i;
@@ -100,7 +123,7 @@ Single undo step on OK.
     }
 
     if (shots.length === 0) {
-        alert("Select Version: no shots with a _footage / _stack precomp and variants found.\n"
+        greyAlert("Select Version", "No shots with a _footage / _stack precomp and variants found.\n"
             + "Run Import Returns (or Re-render Plates) first so there's something to pick from.");
         return;
     }
@@ -386,8 +409,8 @@ Single undo step on OK.
         }
     } finally { app.endUndoGroup(); }
 
-    alert("Select Version: "
-        + shotsTouched + " shot" + (shotsTouched === 1 ? "" : "s")
+    greyAlert("Select Version",
+        shotsTouched + " shot" + (shotsTouched === 1 ? "" : "s")
         + " changed (" + layerStatesChanged + " layer state change"
         + (layerStatesChanged === 1 ? "" : "s") + ").");
 

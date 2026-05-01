@@ -65,8 +65,31 @@ optional flat _grade/ folder for Resolve returns:
 
 (function () {
 
+    // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+    // dark panel theme instead of the macOS system alert with the Ae app
+    // icon slapped on top.
+    function greyAlert(title, msg) {
+        var dlg = new Window("dialog", title);
+        dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+        dlg.spacing = 10; dlg.margins = 14;
+        var p = dlg.add("panel", undefined, "");
+        p.orientation = "column"; p.alignChildren = ["fill", "top"];
+        p.margins = [12, 12, 12, 12]; p.spacing = 4;
+        var lines = String(msg).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            p.add("statictext", undefined, lines[i]);
+        }
+        var bg = dlg.add("group");
+        bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+        bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+        var ok = bg.add("button", undefined, "OK", { name: "ok" });
+        ok.preferredSize = [90, 28];
+        ok.onClick = function () { dlg.close(1); };
+        dlg.show();
+    }
+
     var proj = app.project;
-    if (!proj || !proj.file) { alert("Import Returns: save the project first."); return; }
+    if (!proj || !proj.file) { greyAlert("Import Returns", "Save the project first."); return; }
 
     // ── UI ────────────────────────────────────────────────────────────────────
     var LABEL_W = 120; var FIELD_H = 22;
@@ -174,7 +197,7 @@ optional flat _grade/ folder for Resolve returns:
     var fsShots = /^(\/|[A-Za-z]:)/.test(shotsPathText)
                 ? new Folder(shotsPathText)
                 : new Folder(aepFolder.fsName + "/" + shotsPathText);
-    if (!fsShots.exists) { alert("Shots folder not found:\n" + fsShots.fsName); return; }
+    if (!fsShots.exists) { greyAlert("Import Returns", "Shots folder not found:\n" + fsShots.fsName); return; }
 
     var fileFilter     = etFilter.text;
     var dryRun         = chkDryRun.value;
@@ -381,14 +404,14 @@ optional flat _grade/ folder for Resolve returns:
             next++;
         }
         if (!newFile) {
-            alert("Import Returns: could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
+            greyAlert("Import Returns", "Could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
             return null;
         }
         try {
             proj.save();
             proj.save(newFile);
         } catch (eSave) {
-            alert("Import Returns: failed to save versioned copy —\n" + eSave.message +
+            greyAlert("Import Returns", "Failed to save versioned copy —\n" + eSave.message +
                   "\n\nAborting so the original file stays untouched.");
             return null;
         }
@@ -464,7 +487,7 @@ optional flat _grade/ folder for Resolve returns:
 
     // ── Main ──────────────────────────────────────────────────────────────────
     var shotComps = collectShotComps();
-    if (shotComps.length === 0) { alert("No *_comp compositions found in the project."); return; }
+    if (shotComps.length === 0) { greyAlert("Import Returns", "No *_comp compositions found in the project."); return; }
 
     var importedFiles = buildImportedFilesMap();
     var binShots = getBinFolder("Shots");
@@ -707,7 +730,7 @@ optional flat _grade/ folder for Resolve returns:
         }
 
     } catch (e) {
-        alert("Import Returns error:\n" + e.message + "\nLine: " + e.line);
+        greyAlert("Import Returns", "Error:\n" + e.message + "\nLine: " + e.line);
     }
     if (!dryRun) app.endUndoGroup();
 

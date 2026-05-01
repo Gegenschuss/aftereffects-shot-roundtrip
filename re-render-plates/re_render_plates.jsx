@@ -69,8 +69,31 @@ and runs in detect-only mode.
 
 (function () {
 
+    // Grey ScriptUI dialog — replaces alert() so messages render in AE's
+    // dark panel theme instead of the macOS system alert with the Ae app
+    // icon slapped on top.
+    function greyAlert(title, msg) {
+        var dlg = new Window("dialog", title);
+        dlg.orientation = "column"; dlg.alignChildren = ["fill", "top"];
+        dlg.spacing = 10; dlg.margins = 14;
+        var p = dlg.add("panel", undefined, "");
+        p.orientation = "column"; p.alignChildren = ["fill", "top"];
+        p.margins = [12, 12, 12, 12]; p.spacing = 4;
+        var lines = String(msg).split("\n");
+        for (var i = 0; i < lines.length; i++) {
+            p.add("statictext", undefined, lines[i]);
+        }
+        var bg = dlg.add("group");
+        bg.orientation = "row"; bg.alignment = ["fill", "bottom"];
+        bg.add("statictext", undefined, "").alignment = ["fill", "center"];
+        var ok = bg.add("button", undefined, "OK", { name: "ok" });
+        ok.preferredSize = [90, 28];
+        ok.onClick = function () { dlg.close(1); };
+        dlg.show();
+    }
+
     var proj = app.project;
-    if (!proj || !proj.file) { alert("Re-render Plates: save the project first."); return; }
+    if (!proj || !proj.file) { greyAlert("Re-render Plates", "Save the project first."); return; }
 
     // ── UI ────────────────────────────────────────────────────────────────────
     var LABEL_W = 120; var FIELD_H = 22;
@@ -179,7 +202,7 @@ and runs in detect-only mode.
 
     // ── Resolve inputs ────────────────────────────────────────────────────────
     var suffix = String(etSuffix.text || "").replace(/^[\s_]+|[\s_]+$/g, "");
-    if (!suffix) { alert("Re-render Plates: suffix is required."); return; }
+    if (!suffix) { greyAlert("Re-render Plates", "Suffix is required."); return; }
     // Sanitise for a filename segment — strip anything a filesystem hates and
     // collapse internal whitespace to underscores.
     suffix = suffix.replace(/\s+/g, "_").replace(/[\/\\:*?"<>|]/g, "");
@@ -189,7 +212,7 @@ and runs in detect-only mode.
     var fsShots = /^(\/|[A-Za-z]:)/.test(shotsPathText)
                 ? new Folder(shotsPathText)
                 : new Folder(aepFolder.fsName + "/" + shotsPathText);
-    if (!fsShots.exists) { alert("Shots folder not found:\n" + fsShots.fsName); return; }
+    if (!fsShots.exists) { greyAlert("Re-render Plates", "Shots folder not found:\n" + fsShots.fsName); return; }
 
     var omTemplate = etOM.text;
     var dryRun     = chkDryRun.value;
@@ -567,12 +590,12 @@ and runs in detect-only mode.
             next++;
         }
         if (!newFile) {
-            alert("Re-render Plates: could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
+            greyAlert("Re-render Plates", "Could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
             return null;
         }
         try { proj.save(); proj.save(newFile); }
         catch (eSave) {
-            alert("Re-render Plates: failed to save versioned copy —\n" + eSave.message +
+            greyAlert("Re-render Plates", "Failed to save versioned copy —\n" + eSave.message +
                   "\n\nAborting so the original file stays untouched.");
             return null;
         }
@@ -632,7 +655,7 @@ and runs in detect-only mode.
     }
 
     var shotComps = collectShotComps();
-    if (shotComps.length === 0) { alert("No *_comp compositions found in the project."); return; }
+    if (shotComps.length === 0) { greyAlert("Re-render Plates", "No *_comp compositions found in the project."); return; }
 
     var binShots = getBinFolder("Shots");
 

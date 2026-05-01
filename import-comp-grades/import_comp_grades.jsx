@@ -358,6 +358,55 @@
         return;
     }
 
+    // ── version bump ─────────────────────────────────────────────────
+    // Same VFX-versioning rule the other roundtrip tools use:
+    // MyProject_v03.aep → MyProject_v04.aep before any mutation, so the
+    // original file is the rollback point. Skip when the project hasn't
+    // been saved yet — there's no anchor to version off.
+    if (!proj.file) {
+        greyAlert("Import Comp Grades", "Save the project first so it can be versioned before any changes.");
+        return;
+    }
+    function pad(n, s) { var str = "" + n; while (str.length < s) str = "0" + str; return str; }
+    function saveAsNextVersion() {
+        var cur = proj.file;
+        if (!cur) return null;
+        var baseName = cur.name.replace(/\.aep$/i, "");
+        var m = baseName.match(/^(.*?)(_?v)(\d+)$/);
+        var stem, prefix, width, next;
+        if (m) {
+            stem   = m[1];
+            prefix = m[2];
+            width  = m[3].length;
+            next   = parseInt(m[3], 10) + 1;
+        } else {
+            stem   = baseName;
+            prefix = "_v";
+            width  = 2;
+            next   = 1;
+        }
+        var newFile = null;
+        while (next < 10000) {
+            var candidate = new File(cur.parent.fsName + "/" + stem + prefix + pad(next, width) + ".aep");
+            if (!candidate.exists) { newFile = candidate; break; }
+            next++;
+        }
+        if (!newFile) {
+            greyAlert("Import Comp Grades", "Could not find an unused version number for the backup copy.\nAborting so nothing is modified.");
+            return null;
+        }
+        try {
+            proj.save();
+            proj.save(newFile);
+        } catch (eSave) {
+            greyAlert("Import Comp Grades", "Failed to save versioned copy —\n" + eSave.message +
+                  "\n\nAborting so the original file stays untouched.");
+            return null;
+        }
+        return newFile;
+    }
+    if (!saveAsNextVersion()) return;
+
     var imported   = 0;
     var tcAligned  = 0;
     var fallback   = 0;
