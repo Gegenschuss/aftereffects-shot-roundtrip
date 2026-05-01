@@ -294,6 +294,12 @@ NOTES
         };
 
         var chkSkipRender     = pnlOpt.add("checkbox", undefined, "Skip Render (debug)");           chkSkipRender.value     = false;
+        var chkFlatPlates     = pnlOpt.add("checkbox", undefined, "Flat Plate Folder (all plate.mov / reversed.mov in one bulk folder)");
+        chkFlatPlates.value   = false;
+        chkFlatPlates.helpTip = "ON: write every shot's plate.mov and reversed.mov to a single {shots}/_plates/ folder (easier bulk denoise/grade). OFF: per-shot {shot}/plate/ + {shots}/_baked/ layout. The {shot}/render/ folder for VFX returns is unaffected either way, so Import Returns keeps working.";
+        var chkDebugKeepFwd   = pnlOpt.add("checkbox", undefined, "Debug — keep forward plate after bake");
+        chkDebugKeepFwd.value = false;
+        chkDebugKeepFwd.helpTip = "ON (debug): keep both the forward plate and the reversed bake in the stack so Switch Variant can A/B them. OFF (production): after a successful bake, the forward plate is removed from the stack, the project, and disk — only the reversed plate remains, so the artist has no doubt which to use.";
 
         // ── Burnin Fields ──────────────────────────────
         // Populate the "Burnin Fields" precomp at roundtrip time so the
@@ -358,7 +364,9 @@ NOTES
             burninProject:  "",
             burninCompany:  "Gegenschuss",
             burninAgency:   "",
-            burninClient:   ""
+            burninClient:   "",
+            flatPlates:     "false",
+            debugKeepFwd:   "false"
         };
         function srLoad(key, fallback) {
             try {
@@ -395,6 +403,8 @@ NOTES
             if ("burninCompany" in s) etBurninCompany.text = s.burninCompany;
             if ("burninAgency"  in s) etBurninAgency.text  = s.burninAgency;
             if ("burninClient"  in s) etBurninClient.text  = s.burninClient;
+            if ("flatPlates"    in s) chkFlatPlates.value   = (s.flatPlates    === "true" || s.flatPlates    === true);
+            if ("debugKeepFwd"  in s) chkDebugKeepFwd.value = (s.debugKeepFwd  === "true" || s.debugKeepFwd  === true);
             applyAutoStartUI();
         }
         srApply({
@@ -413,7 +423,9 @@ NOTES
             burninProject:  srLoad("burninProject",  SR_DEFAULTS.burninProject),
             burninCompany:  srLoad("burninCompany",  SR_DEFAULTS.burninCompany),
             burninAgency:   srLoad("burninAgency",   SR_DEFAULTS.burninAgency),
-            burninClient:   srLoad("burninClient",   SR_DEFAULTS.burninClient)
+            burninClient:   srLoad("burninClient",   SR_DEFAULTS.burninClient),
+            flatPlates:     srLoad("flatPlates",     SR_DEFAULTS.flatPlates),
+            debugKeepFwd:   srLoad("debugKeepFwd",   SR_DEFAULTS.debugKeepFwd)
         });
 
         // Project-local override: if a Burnin Fields precomp already exists
@@ -473,6 +485,8 @@ NOTES
             srSave("burninCompany", etBurninCompany.text);
             srSave("burninAgency",  etBurninAgency.text);
             srSave("burninClient",  etBurninClient.text);
+            srSave("flatPlates",    chkFlatPlates.value);
+            srSave("debugKeepFwd",  chkDebugKeepFwd.value);
             dlg.close(1);
         };
         btnCancel.onClick = function() { dlg.close(2); };
@@ -3437,9 +3451,19 @@ NOTES
 
                 var fsShotDir = new Folder(fsScripts.fsName + "/" + shotName);
                 if (!fsShotDir.exists) fsShotDir.create();
-                var fsShotPlate = new Folder(fsShotDir.fsName + "/plate"); if(!fsShotPlate.exists) fsShotPlate.create();
+                // {shot}/render/ stays per-shot regardless of flatPlates so
+                // Import Returns can still discover VFX returns by walking
+                // {shots}/{shot}/render/.
                 var fsShotRender = new Folder(fsShotDir.fsName + "/render"); if(!fsShotRender.exists) fsShotRender.create();
-                var pPath = new File(fsShotPlate.fsName + "/" + shotName + "_plate.mov");
+                var fsPlateDir;
+                if (chkFlatPlates.value) {
+                    fsPlateDir = new Folder(fsScripts.fsName + "/_plates");
+                    if (!fsPlateDir.exists) fsPlateDir.create();
+                } else {
+                    fsPlateDir = new Folder(fsShotDir.fsName + "/plate");
+                    if (!fsPlateDir.exists) fsPlateDir.create();
+                }
+                var pPath = new File(fsPlateDir.fsName + "/" + shotName + "_plate.mov");
                 om.file = pPath;
 
                 renderItems.push({ n: shotName, p: pPath, c: shotComp, s: fullStart, w: osWidth, h: osHeight, cs: cutStart, cd: cutDuration, bin: shotBin, rq: rq, pc: stackComp, src: source, mainLayerIdx: item.mainLayerIdx, cc: containerComp });
@@ -3958,7 +3982,13 @@ NOTES
                             bakeMatchedThisShot = true;
                         }
                         if (bakeMatchedThisShot) {
-                            var bakedFolder = new Folder(fsBakeRoot.fsName + "/_baked");
+                            // Flat Plate Folder mode shares one bulk folder
+                            // ({shots}/_plates/) for plate.mov AND reversed.mov;
+                            // otherwise reversed.mov sits next to the forward
+                            // plate.mov in the per-shot {shot}/plate/ folder.
+                            var bakedFolder = chkFlatPlates.value
+                                ? new Folder(fsBakeRoot.fsName + "/_plates")
+                                : new Folder(fsBakeRoot.fsName + "/" + ri.n + "/plate");
                             if (!bakedFolder.exists) bakedFolder.create();
                             if (bakedFolder.exists) {
                                 // Always write to {shot}_reversed.mov, overwriting any
@@ -4065,15 +4095,18 @@ NOTES
                                                     // disabled) for diff-key A/B via Switch
                                                     // Variant.
                                                     try { revL.enabled = true; } catch (eRevEn) {}
-                                                    try { revL.comment = "Reversed variant of " + ri.n + "_plate (rendered from _stack via wrapper time-remap). Active by default after roundtrip; the forward plate is also in the stack (disabled) — use Switch Variant in the panel to swap."; } catch (eRComm) {}
+                                                    var fwdComment = chkDebugKeepFwd.value
+                                                        ? "Reversed variant of " + ri.n + "_plate (rendered from _stack via wrapper time-remap). Active by default after roundtrip; the forward plate is also in the stack (disabled) — use Switch Variant in the panel to swap."
+                                                        : "Reversed variant of " + ri.n + "_plate (rendered from _stack via wrapper time-remap). Production mode: forward plate was removed after bake; the reversed plate is the canonical deliverable.";
+                                                    try { revL.comment = fwdComment; } catch (eRComm) {}
                                                     try { revL.property("Marker").setValueAtTime(cutInPP,  cutMarker("cut in"));  } catch (eRBM1) {}
                                                     try { revL.property("Marker").setValueAtTime(cutOutPP, cutMarker("cut out")); } catch (eRBM2) {}
 
-                                                    // Disable plate.mov so the bake is the only
-                                                    // audible/visible variant.  Find by suffix
-                                                    // (the auto-rendered plate is named
-                                                    // {shot}_plate.mov; user-imported plate
-                                                    // variants follow the same convention).
+                                                    // Find the forward plate.mov layer in the
+                                                    // stack. Match by suffix — the auto-rendered
+                                                    // plate is named {shot}_plate.mov, and user-
+                                                    // imported plate variants follow the same
+                                                    // convention.
                                                     var bakePlateLyr = null;
                                                     for (var bpl = 1; bpl <= tPrecomp.numLayers; bpl++) {
                                                         var bplLyr;
@@ -4081,7 +4114,26 @@ NOTES
                                                         if (!bplLyr || !bplLyr.source || !bplLyr.source.name) continue;
                                                         if (/_plate\.mov$/.test(bplLyr.source.name)) { bakePlateLyr = bplLyr; break; }
                                                     }
-                                                    if (bakePlateLyr) { try { bakePlateLyr.enabled = false; } catch (eBPED) {} }
+                                                    if (bakePlateLyr) {
+                                                        if (chkDebugKeepFwd.value) {
+                                                            // Debug: keep the forward plate in the
+                                                            // stack (disabled) so Switch Variant can
+                                                            // A/B between bake and forward.
+                                                            try { bakePlateLyr.enabled = false; } catch (eBPED) {}
+                                                        } else {
+                                                            // Production: remove forward plate from
+                                                            // the stack, drop the footage from the
+                                                            // project, and delete the file from disk.
+                                                            // Leaves the artist with a single
+                                                            // canonical plate per shot — no doubt
+                                                            // which to use.
+                                                            var fwdSrc = null;
+                                                            try { fwdSrc = bakePlateLyr.source; } catch (eFSrc) {}
+                                                            try { bakePlateLyr.remove(); } catch (eFRm) {}
+                                                            try { if (fwdSrc) fwdSrc.remove(); } catch (eFSRm) {}
+                                                            try { if (ri.p && ri.p.exists) ri.p.remove(); } catch (eFFRm) {}
+                                                        }
+                                                    }
 
                                                     // Mirror the container's time-remap values
                                                     // around the plate-range midpoint so the

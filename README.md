@@ -241,18 +241,43 @@ work is underway. The pipeline is designed around this:
     For each reversed clip ticked Bake, after the main render
     finishes the roundtrip wraps the shot's `_stack` precomp and
     renders it back out as a forward-playing reversed plate
-    `{shot}_reversed.mov` into `{Roundtrip}/_baked/`. The baked
-    file is added to `_stack` as a top-layer variant (blue label),
-    **disabled by default**. The container's time-remap stays
-    descending so the edit plays the original reverse cut from the
-    forward `_plate.mov` (which is on top and enabled). The baked
-    `_reversed.mov` sits underneath, ready for difference-key A/B —
-    use **Switch Variant** in the panel to flip both atomically
-    (variant enable/disable + container time-remap mirror) without
-    breaking the cut. Bottom row of the dialog has `Toggle Bake` /
-    `Select All` / `Deselect All` for bulk flipping; the Continue
-    button updates live to "Continue: N bake, M convert" so you see
-    the split before you commit.
+    `{shot}_reversed.mov` into the same `{shot}/plate/` folder as
+    the forward plate (or into `{Roundtrip}/_plates/` when Flat
+    Plate Folder is on — see below). The baked
+    file is added to `_stack` as a top-layer variant (blue label)
+    and the container's time-remap is mirrored to ascending so the
+    edit plays the cut FORWARD from the bake — the bake is the
+    canonical deliverable for reversed shots. Bottom row of the
+    warning dialog has `Toggle Bake` / `Select All` / `Deselect All`
+    for bulk flipping; the Continue button updates live to
+    "Continue: N bake, M convert" so you see the split before you
+    commit.
+
+    Whether the forward `_plate.mov` is kept alongside the bake is
+    controlled by the **Debug — keep forward plate after bake**
+    checkbox in the Pipeline Options panel:
+
+    - **OFF (default, production).** After a successful bake the
+      forward plate is removed from the `_stack` precomp, dropped
+      from the project, and deleted from disk. The artist sees a
+      single canonical plate per shot — no doubt which to grade.
+    - **ON (debug).** Both the forward plate and the bake stay in
+      the `_stack` (forward disabled, bake enabled). Use **Switch
+      Variant** in the panel to flip both atomically (variant
+      enable/disable + container time-remap mirror) for
+      difference-key A/B without breaking the cut.
+
+    **Flat Plate Folder** (Pipeline Options checkbox, default OFF).
+    When ON, every shot's `plate.mov` and `reversed.mov` is written
+    to a single bulk folder at `{Roundtrip}/_plates/` instead of
+    sitting in each shot's per-shot `{shot}/plate/` folder.
+    Files keep their `{shot}_plate.mov` / `{shot}_reversed.mov`
+    names so there are no collisions, and bulk processing
+    (denoise, stabilize, dailies grading) gets a single drop
+    target. **Import Returns is unaffected** either way — VFX
+    returns still live in `{shots}/{shot}/render/`, grades in the
+    flat `{shots}/_grade/`, and neither path depends on where the
+    plates landed.
 
     **Color Time-Reverse Layers** (button in the Settings dialog).
     Walks the active comp's top-level layers in one undo step:
