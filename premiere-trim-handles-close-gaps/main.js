@@ -185,31 +185,25 @@ entrypoints.setup({
               })(clipData[k]);
             }
 
-            // Pass 2: re-fetch and trim heads
-            var selObj2     = await sequence.getSelection();
-            var trackItems2 = await selObj2.getTrackItems();
-            var clipData2   = [];
-            for (var m = 0; m < trackItems2.length; m++) {
-              var it2 = trackItems2[m];
-              if (!(it2 instanceof ppro.VideoClipTrackItem)) continue;
-              var name2 = await it2.getName();
-              for (var x = 0; x < clipData.length; x++) {
-                if (clipData[x].name === name2) {
-                  clipData2.push({ item: it2, newStartTT: clipData[x].newStartTT });
-                  break;
-                }
-              }
-            }
-            for (var n = 0; n < clipData2.length; n++) {
-              await (async function(d2) {
+            // Pass 2: trim heads — operate on the original clipData item
+            // references directly. The previous version re-fetched the
+            // selection and matched clips back by getName(), which mis-pairs
+            // duplicate-named clips (the norm when a source recurs across
+            // shots, or AE dynamicLink wrappers that share a name): two
+            // same-named clips both resolve to the first match, so one gets
+            // the wrong head trim and the other is never trimmed. TrackItem
+            // references stay valid across transactions — the gap-close pass
+            // and both undo passes below already rely on exactly that.
+            for (var n = 0; n < clipData.length; n++) {
+              await (async function(d) {
                 await project.lockedAccess(async () => {
                   try {
-                    var a = d2.item.createSetStartAction(d2.newStartTT);
+                    var a = d.item.createSetStartAction(d.newStartTT);
                     await project.executeTransaction(function(ca) { ca.addAction(a); });
                     trimmed++;
                   } catch(e) { console.error('head trim:', e.message); }
                 });
-              })(clipData2[n]);
+              })(clipData[n]);
             }
 
             var trimUndoData = clipData.map(function(d) {
@@ -315,47 +309,23 @@ entrypoints.setup({
                 })(lastUndo.trim[i]);
               }
 
-              // Pass 2: restore start times — re-fetch via selection if available
-              var project2  = await ppro.Project.getActiveProject();
-              var sequence2 = await project2.getActiveSequence();
-              var selObj2   = await sequence2.getSelection();
-              var items2    = await selObj2.getTrackItems();
-
-              var undoMap = {};
-              for (var u = 0; u < lastUndo.trim.length; u++) {
-                undoMap[lastUndo.trim[u].name] = lastUndo.trim[u];
-              }
-
-              if (items2 && items2.length > 0) {
-                for (var k = 0; k < items2.length; k++) {
-                  var item2 = items2[k];
-                  if (!(item2 instanceof ppro.VideoClipTrackItem)) continue;
-                  var name2 = await item2.getName();
-                  if (!undoMap[name2]) continue;
-                  var origStartTT = await ppro.TickTime.createWithSeconds(undoMap[name2].origStart);
-                  await (async function(it, tt) {
-                    await project2.lockedAccess(async () => {
-                      try {
-                        var a = it.createSetStartAction(tt);
-                        await project2.executeTransaction(function(ca) { ca.addAction(a); });
-                        restored++;
-                      } catch(e) { console.error('undo head (fresh):', e.message); }
-                    });
-                  })(item2, origStartTT);
-                }
-              } else {
-                for (var j = 0; j < lastUndo.trim.length; j++) {
-                  await (async function(entry) {
-                    var origStartTT = await ppro.TickTime.createWithSeconds(entry.origStart);
-                    await project2.lockedAccess(async () => {
-                      try {
-                        var a = entry.item.createSetStartAction(origStartTT);
-                        await project2.executeTransaction(function(ca) { ca.addAction(a); });
-                        restored++;
-                      } catch(e) { console.error('undo head (stored):', e.message); }
-                    });
-                  })(lastUndo.trim[j]);
-                }
+              // Pass 2: restore start times on the original references
+              // directly. The previous version re-fetched the selection and
+              // matched back by getName(), which mis-pairs duplicate-named
+              // clips — restoring the wrong origStart moves a clip to the
+              // wrong place. Stored references are valid here: Step 1 and
+              // Pass 1 above already mutated these same references.
+              for (var j = 0; j < lastUndo.trim.length; j++) {
+                await (async function(entry) {
+                  var origStartTT = await ppro.TickTime.createWithSeconds(entry.origStart);
+                  await project.lockedAccess(async () => {
+                    try {
+                      var a = entry.item.createSetStartAction(origStartTT);
+                      await project.executeTransaction(function(ca) { ca.addAction(a); });
+                      restored++;
+                    } catch(e) { console.error('undo head:', e.message); }
+                  });
+                })(lastUndo.trim[j]);
               }
             }
 

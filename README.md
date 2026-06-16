@@ -216,7 +216,18 @@ work is underway. The pipeline is designed around this:
   stills (PNG / JPG / EPS / PDF / solids — anything with
   `source.duration === 0`) drop out too, since they don't need plates
   rendered. One Premiere-style cut → one shot, not one shot per inner
-  clip.
+  clip. A precomp wrapping a **single** footage clip is never dropped by
+  this filter: if the outer layer carries a reversed or non-linear
+  speed-ramp whose projected window would miss the inner clip, the scan
+  falls back to that lone footage so the shot is still created (only
+  *multi*-clip precomps get window-pruned). Such a single-clip precomp —
+  even one whose inner layer carries a reversed stretch + eased speed-ramp
+  — is also *built* cleanly: its container's inner layer is normalised to
+  `stretch=100` and the full ramp is baked into the container's chain
+  keyframes (the same time base a plain-footage shot gets), so the cut
+  plays back faithfully instead of freezing. Precomps whose inner layers
+  carry real effects (e.g. Warp Stabilizer, 3D Camera Tracker) keep the
+  native precomp build so their analysis caches survive.
 
   **Auto-rotate for vertical / portrait sources.** A 1920×1080 horizontal
   source pinned 90° in mainComp renders as 1080×1920 vertical — the
@@ -447,9 +458,12 @@ work is underway. The pipeline is designed around this:
      (guide layers are auto-excluded from render already), so the output
      is the pristine plate — never a previously imported grade, render,
      or plate variant. Enabled states are restored in a `try/finally`.
-  4. Queues each `_comp` for render over its workArea (the clip +
-     handles span set by Shot Roundtrip), so `{shot}_{suffix}.mov` has
-     exactly the frames external tools need.
+  4. Queues each `_comp` for render over the full cut+handles range —
+     the same span Shot Roundtrip rendered the original plate over (read
+     from the `{shot}_stack` precomp's position and duration, **not** the
+     `_comp` work area, which is the editorial cut only). So
+     `{shot}_{suffix}.mov` matches the original plate frame-for-frame,
+     including the head/tail handles external tools need.
   5. After render, imports each rendered file back into the
      `{shot}_stack` precomp (above any existing plate-like layers). The
      new variant becomes the active plate for future re-renders /
@@ -481,7 +495,10 @@ work is underway. The pipeline is designed around this:
   Variant flips both at once: toggles the enabled flags AND mirrors
   the time-remap values around the plate-range midpoint
   (`ppLayer.startTime + ppLayer.outPoint`). Click once to swap,
-  click again to swap back. Idempotent — twice = identity.
+  click again to swap back. Idempotent — twice = identity. It also
+  re-anchors audio after the swap so only the topmost audio-bearing
+  layer in the stack stays audible (no doubled audio when both
+  `plate.mov` and `reversed.mov` carry a track).
   Project-wide preflight dialog: lists every `shot_NNN_container`
   with a checkbox showing the current variant (☐ plate / ☑ bake),
   bulk buttons (`All → Bake` / `All → Plate` / `Refresh`). Shots
@@ -503,6 +520,13 @@ work is underway. The pipeline is designed around this:
     (e.g. the topmost layer starting with `KM_010` in comp `KM_010_comp`).
 
   Works for movie files and image sequences (MOV, MP4, DPX, EXR, …).
+
+  For QuickTime sources the native frame rate, duration, and embedded
+  start timecode are read straight from the file header (`mvhd` /
+  `tmcd`) so Resolve conforms by the clip's real TC range. Both integer
+  rates (24/25/30/50/60) and NTSC fractional rates (23.976 / 29.97 /
+  59.94) are recognised; anything else falls back to AE's interpreted
+  rate with a warning.
 
   **Resolve delivery setup for graded returns:**
 
@@ -542,9 +566,12 @@ comp (vs. the layer-scoped Roundtrip tools above). Live in the panel's
   new layer directly above the original. Matches by source-file stem
   prefix — Resolve's "Use Unique Filenames" suffix (e.g. `_V1-0064`)
   is fine; newest-by-modification-time wins if multiple versions are
-  present. Aligns by embedded source timecode (QuickTime `tmcd` atom)
-  so Resolve-rendered handles stack correctly; falls back to inPoint
-  alignment when TC can't be read.
+  present. Aligns by embedded source timecode (QuickTime `tmcd` atom,
+  integer and NTSC fractional rates) so Resolve-rendered handles stack
+  correctly; falls back to inPoint alignment when TC can't be read.
+  Reversed (negative-stretch) source layers skip TC alignment and fall
+  back to inPoint with a "verify this grade" warning — a forward-rendered
+  grade can't be safely TC-mapped onto a reversed plate.
 - **Create Dynamic Link Comps** — The Shot Roundtrip creates these
   automatically, but After Effects' "Reduce Project" and "Collect Files"
   can strip them out. This rebuilds them from the existing shot comps so

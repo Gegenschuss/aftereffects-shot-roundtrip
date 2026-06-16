@@ -218,6 +218,29 @@
         if (state.plateLyr) { try { state.plateLyr.enabled = !state.plateLyr.enabled; } catch (e) {} }
         if (state.revLyr)   { try { state.revLyr.enabled   = !state.revLyr.enabled;   } catch (e) {} }
 
+        // Re-anchor audio. Audio must follow the now-active (enabled) variant
+        // and only one layer may carry it. Toggling enabled flags above does
+        // NOT touch audioEnabled, so without this a flip can leave the
+        // now-hidden variant as the audio source, or both plate.mov and
+        // reversed.mov audible at once (doubled / phasey audio). Walk
+        // top-down: enable audio on the topmost ENABLED audio-bearing
+        // non-guide layer, mute every other audio-bearing layer. (Unlike the
+        // shot_roundtrip import re-anchor, the topmost layer here may be the
+        // just-disabled variant, so we MUST require aL.enabled — picking by
+        // position alone would hand audio to the hidden clip.)
+        try {
+            var topAudioFound = false;
+            for (var ai = 1; ai <= state.stackComp.numLayers; ai++) {
+                var aL;
+                try { aL = state.stackComp.layer(ai); } catch (eAL0) { continue; }
+                if (!aL || !(aL instanceof AVLayer)) continue;
+                if (!aL.hasAudio) continue;
+                var enableAudio = (aL.enabled && !aL.guideLayer && !topAudioFound);
+                try { aL.audioEnabled = enableAudio; } catch (eAE) {}
+                if (enableAudio) topAudioFound = true;
+            }
+        } catch (eAudPass) {}
+
         if (state.bakeInner.timeRemapEnabled) {
             var tr;
             try { tr = state.bakeInner.property("Time Remap"); } catch (eTR) { return true; }

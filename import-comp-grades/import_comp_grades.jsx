@@ -141,10 +141,27 @@
                     ? readU32(raw, durOff)
                     : readU32(raw, durOff + 4);
 
-        var validFps = { 24:1, 25:1, 30:1, 48:1, 50:1, 60:1 };
-        if (!validFps[ts]) return null;
+        // Map timescale -> real fps. Integer rates store timescale == fps
+        // (duration in frames); NTSC fractional rates store timescale in
+        // thousandths (24000/30000/60000) with duration in those units, so
+        // frames = (dur/timescale)*fps. Kept in sync with the same function
+        // in export-shot-xml/export_shot_xml.jsx — without the NTSC mapping
+        // getFileInfo returns null for 23.976/29.97/59.94 media (the common
+        // delivery rates) and ALL TC alignment below is silently skipped.
+        var fps = 0;
+        if      (ts === 24)    fps = 24;
+        else if (ts === 25)    fps = 25;
+        else if (ts === 30)    fps = 30;
+        else if (ts === 48)    fps = 48;
+        else if (ts === 50)    fps = 50;
+        else if (ts === 60)    fps = 60;
+        else if (ts === 24000) fps = 24000 / 1001;  // 23.976
+        else if (ts === 30000) fps = 30000 / 1001;  // 29.97
+        else if (ts === 60000) fps = 60000 / 1001;  // 59.94
+        else return null;                            // unknown / non-video timescale
 
-        return { fps: ts, totalFrames: dur };
+        var totalFrames = Math.round(dur * fps / ts);
+        return { fps: fps, totalFrames: totalFrames };
     }
 
     function readFileTCFrame(file, raw) {
@@ -461,6 +478,19 @@
                 if (srcInfo && gradeInfo && srcInfo.fps > 0 && gradeInfo.fps > 0
                     && (srcInfo.tcStartFrame > 0 || gradeInfo.tcStartFrame > 0)) {
                     var stretchPct = (L.stretch !== 0) ? L.stretch : 100;
+                    if (stretchPct < 0) {
+                        // Reversed (negative-stretch) source: the source-TC-
+                        // at-inPoint mapping runs backward, so TC alignment
+                        // would land the forward-rendered grade on the wrong
+                        // frames (and could still pass the coverage check).
+                        // The paired exporter (export_shot_xml) detects
+                        // reversed stretch and forward-flips with a warning;
+                        // here we refuse TC math and fall back to inPoint
+                        // alignment so the mismatch is surfaced, not silent.
+                        warnings.push(L.name + ": reversed stretch (" + stretchPct
+                            + "%) — TC alignment skipped (a forward-rendered grade can't be safely "
+                            + "TC-mapped onto a reversed plate); fell back to inPoint alignment — verify this grade.");
+                    } else {
                     // Seconds since TC 00:00:00:00.
                     var srcTCStartSec   = srcInfo.tcStartFrame   / srcInfo.fps;
                     var gradeTCStartSec = gradeInfo.tcStartFrame / gradeInfo.fps;
@@ -485,6 +515,7 @@
                             + " → " + framesTC(gradeInfo.tcStartFrame + gradeInfo.totalFrames, gradeInfo.fps)
                             + "] doesn't cover source TC " + framesTC(Math.round(srcTCAtInPointSec * srcInfo.fps), srcInfo.fps)
                             + " at inPoint — fell back to inPoint alignment.");
+                    }
                     }
                 } else {
                     if (!srcInfo || !gradeInfo) {

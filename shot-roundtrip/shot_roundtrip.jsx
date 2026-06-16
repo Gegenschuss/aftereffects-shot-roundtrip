@@ -1472,7 +1472,34 @@ NOTES
                     pick = sub;
                     break;
                 }
-                if (!pick) return null;
+                if (!pick) {
+                    // Window-overlap rejected every layer. Single-footage
+                    // fallback: if this sub-comp holds exactly ONE eligible
+                    // footage/precomp layer, descend into it regardless of the
+                    // [sLo, sHi] overlap test. The visible window is sampled
+                    // only at the cut endpoints (mapTimeToSource has no
+                    // interior-key loop), so a reversed / non-linear time-remap
+                    // can yield a window that misses the lone inner layer's
+                    // local in/out — without this, a single-clip precomp shot
+                    // is silently dropped. Multi-footage precomps have >1
+                    // eligible layer, so they stay pruned by the windowed scan.
+                    var onlyEligible = null, eligibleCount = 0;
+                    for (var lj = 1; lj <= subComp.numLayers; lj++) {
+                        var sub2;
+                        try { sub2 = subComp.layer(lj); } catch (eL2) { continue; }
+                        if (!sub2 || !sub2.hasVideo) continue;
+                        try { if (sub2.guideLayer || sub2.adjustmentLayer || sub2.nullLayer) continue; } catch (eF2) {}
+                        try { if (sub2.source === null) continue; } catch (eS2) {}
+                        try { if (!sub2.enabled) continue; } catch (eE2) {}
+                        eligibleCount++;
+                        onlyEligible = sub2;
+                    }
+                    if (eligibleCount === 1 && onlyEligible) {
+                        pick = onlyEligible;
+                    } else {
+                        return null;
+                    }
+                }
                 current = pick;
                 // Continue the descent from this layer's containing-comp time.
             }
@@ -1588,6 +1615,25 @@ NOTES
             for (var ci = 1; ci < chain.length; ci++) {
                 var c = chain[ci];
                 try { if (c.timeRemapEnabled) return true; } catch (eTR) {}
+                try {
+                    var fxg = c.property("ADBE Effect Parade");
+                    if (fxg && fxg.numProperties > 0) return true;
+                } catch (eFX) {}
+            }
+            return false;
+        }
+
+        // Effects-only probe (no time-remap clause): true if any chain layer
+        // below the master carries a real effect whose internal state can't
+        // be rebuilt by addProperty + property-tree copy — Warp Stabilizer /
+        // 3D Camera Tracker analyse caches especially. Used to decide whether
+        // a single-footage precomp master that ONLY carries a chain-deep
+        // time-remap/reversed-stretch (no effects) can be re-routed to the
+        // wrap path (which bakes the ramp into clean container chainKeys)
+        // instead of the precomp path (which exists to preserve such caches).
+        function chainHasInnerRealEffects(chain) {
+            for (var ci = 1; ci < chain.length; ci++) {
+                var c = chain[ci];
                 try {
                     var fxg = c.property("ADBE Effect Parade");
                     if (fxg && fxg.numProperties > 0) return true;
@@ -1937,8 +1983,14 @@ NOTES
 
         var shotPrefix = etPrefix.text;
         var startNum = parseInt(etStartNum.text, 10);
+        // Guard NaN/negative (blank or non-numeric field, or a corrupted
+        // persisted setting) — same defensive default as increment/overscan
+        // below. Without this, NaN propagates into shot_NaN_comp names and
+        // NaN-duration plates that survive the version Save-As.
+        if (isNaN(startNum) || startNum < 0) startNum = parseInt(SR_DEFAULTS.startNum, 10);
         var autoStartMode = !!chkAutoStart.value;
         var handleFrames = parseInt(etHandles.text, 10);
+        if (isNaN(handleFrames) || handleFrames < 0) handleFrames = parseInt(SR_DEFAULTS.handles, 10);
         var overscanPercent = parseFloat(etOverscan.text); if(isNaN(overscanPercent)) overscanPercent=0;
         var omTemplate = etOM.text;
         var increment = parseInt(etIncrement.text, 10);
@@ -2350,6 +2402,18 @@ NOTES
                     try { winB = mapTimeToSource(eItem.layer, eItem.layer.outPoint); } catch (eWB) {}
                     var visWin = { start: Math.min(winA, winB), end: Math.max(winA, winB) };
                     var eFounds = findAllFootageInPrecomp(eItem.layer.source, undefined, undefined, visWin);
+                    if (eFounds.length === 0) {
+                        // Single-footage fallback: the visible-window filter can
+                        // reject the lone inner clip when the outer layer carries
+                        // a non-linear / reversed time-remap (mapTimeToSource
+                        // samples only the cut endpoints, so the window can land
+                        // off the inner layer's local in/out). Re-scan WITHOUT the
+                        // window; if the precomp holds exactly one eligible
+                        // footage, keep it. Multi-footage "Replace with AE Comp"
+                        // precomps return >1 here, so they stay pruned.
+                        var eFoundsAll = findAllFootageInPrecomp(eItem.layer.source, undefined, undefined, null);
+                        if (eFoundsAll.length === 1) eFounds = eFoundsAll;
+                    }
                     if (eFounds.length === 0) {
                         skippedLayersIn.push(eItem.layer.name + " (no footage found inside precomp)");
                     } else {
@@ -3484,6 +3548,26 @@ NOTES
 
                 var usePrecompPath = (plan.chain.length > 1) &&
                                      chainHasInnerEffectsOrTimeRemap(plan.chain);
+
+                // Re-route the narrow single-footage reversed/eased precomp
+                // case (chain-deep TIME-REMAP / reversed-stretch only, NO real
+                // effects) to the wrap path. The precomp path can't normalize
+                // it — its container is the renamed original precomp (cut-only,
+                // no handles, at the master's startTime), so master-timeline
+                // chainKeys can't land there. The wrap path builds a full-
+                // mainComp-duration container at startTime=0 with handles and
+                // drives timing from plan.chainKeys (which already bake the
+                // inner ramp). Gated so genuine multi-clip "Replace with AE
+                // Comp" precomps (totalInPrecomp > 1) and analyse-cache effect
+                // chains (Warp Stabilizer / 3D Camera Tracker) stay on the
+                // precomp path. Purely subtractive: only ever flips a shot
+                // from precomp->wrap, so nothing that works today can regress.
+                if (usePrecompPath &&
+                    item.isPrecomp &&
+                    item.totalInPrecomp === 1 &&
+                    !chainHasInnerRealEffects(plan.chain)) {
+                    usePrecompPath = false;
+                }
 
                 var containerComp;
                 if (usePrecompPath) {

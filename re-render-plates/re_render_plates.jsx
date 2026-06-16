@@ -45,8 +45,9 @@ not a copy of whatever the last external pass produced.
 
 WHAT GETS RENDERED
 ------------------
-The outer {shot}_comp, over its workArea (the clip + handles range
-set by Shot Roundtrip). Every layer except the raw plate is disabled
+The outer {shot}_comp, over its full cut+handles range — the same
+range Shot Roundtrip rendered the original plate over (NOT the _comp
+work area, which is the editorial cut only). Every layer except the raw plate is disabled
 for the duration of the render (guide layers are already excluded by
 AE), so the output is the pristine plate — never a grade, render, or
 plate variant. Enabled states are restored via try/finally.
@@ -721,7 +722,14 @@ and runs in detect-only mode.
                 outFile:          outFile,
                 shotName:         shotName,
                 isOS:             isOS,
-                flagged:          flagged
+                flagged:          flagged,
+                // Full plate range (cut + handles), captured from the actual
+                // geometry: the outer stack layer sits at startTime=fullStart
+                // and the _stack precomp's duration IS fullDurationSec (see
+                // shot_roundtrip.jsx stack-precomp build). Render this range,
+                // NOT comp.workArea (which is the editorial cut only).
+                fullStart:        ppOuter.startTime,
+                fullDuration:     stackComp.duration
             });
         }
     } catch (ePrep) {
@@ -813,12 +821,18 @@ and runs in detect-only mode.
     for (var qi = 0; qi < renderPlan.length; qi++) {
         var entry = renderPlan[qi];
         try {
-            // Render _comp over its workArea (clip + handles set by Shot
-            // Roundtrip). Only the plate-precomp layer is enabled (above),
-            // so any FX on that layer get baked into the output.
+            // Render _comp over the FULL plate range (cut + handles),
+            // mirroring how Shot Roundtrip rendered the original plate
+            // (shot_roundtrip.jsx: timeSpanStart=fullStart, duration=
+            // fullDurationSec). The _comp work area is the editorial CUT
+            // ONLY, so rendering over it would drop the head+tail handles
+            // and shift the plate by handleSec — breaking alignment for
+            // every downstream tool. Only the plate-precomp layer is enabled
+            // (above), so any FX on that layer get baked into the output.
             var rq = proj.renderQueue.items.add(entry.comp);
-            rq.timeSpanStart    = entry.comp.workAreaStart + 0.0001;
-            rq.timeSpanDuration = entry.comp.workAreaDuration;
+            // Epsilon pushes timeSpanStart past the frame boundary (matches Shot Roundtrip).
+            rq.timeSpanStart    = entry.fullStart + 0.0001;
+            rq.timeSpanDuration = entry.fullDuration;
             var om = rq.outputModule(1);
             var foundT = false;
             for (var t = 0; t < om.templates.length; t++) if (om.templates[t] === omTemplate) foundT = true;
@@ -902,9 +916,10 @@ and runs in detect-only mode.
             }
             try {
                 var newLayer = ent.stackComp.layers.add(footageItem);
-                // Precomp duration == render duration, so the new layer at
-                // startTime=0 fills it exactly (precomp-time 0 == source-TC
-                // fullStart via displayStartTime).
+                // The render now spans the full cut+handles range, which
+                // equals the _stack precomp's duration, so the new layer at
+                // startTime=0 fills it exactly (precomp-time 0 == leading
+                // handle frame == source-TC fullStart via displayStartTime).
                 try { newLayer.startTime = 0; } catch (eST) {}
                 newLayer.position.setValue([ent.stackComp.width / 2, ent.stackComp.height / 2]);
                 newLayer.label = 12;

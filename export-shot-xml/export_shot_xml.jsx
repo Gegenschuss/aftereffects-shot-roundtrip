@@ -155,11 +155,22 @@
 
     /**
      * Parse the QuickTime mvhd atom from a raw binary string.
-     * Returns { fps, totalFrames } if the timescale is a standard video fps,
-     * otherwise returns null.
+     * Returns { fps, totalFrames } if the timescale maps to a known video
+     * rate, otherwise returns null.
      *
      * mvhd v0: [type(4)] version(1) flags(3) creation(4) modification(4) timescale(4) duration(4)
      * mvhd v1: [type(4)] version(1) flags(3) creation(8) modification(8) timescale(4) duration(8)
+     *
+     * Integer-rate files store timescale == fps and count duration in
+     * frames directly. NTSC fractional rates (23.976 / 29.97 / 59.94)
+     * store timescale in thousandths (24000 / 30000 / 60000) and count
+     * duration in those units, so the real frame count is
+     * (duration / timescale) * fps. Both forms are handled here; without
+     * the NTSC mapping every fractional-rate ProRes/MOV — the dominant
+     * delivery format — fell through to AE's interpreted fps/duration and
+     * lost its embedded start timecode. (Exotic rates like 47.952 are
+     * intentionally NOT mapped — rateBlock's NTSC test doesn't cover them,
+     * so they fall back to AE rather than emit an inconsistent rate block.)
      */
     function parseMvhd(raw) {
         var idx = raw.indexOf("mvhd");
@@ -174,10 +185,22 @@
                     ? readU32(raw, durOff)
                     : readU32(raw, durOff + 4); // lower 32 bits of 64-bit duration
 
-        var validFps = { 24:1, 25:1, 30:1, 48:1, 50:1, 60:1 };
-        if (!validFps[ts]) return null;
+        var fps = 0;
+        if      (ts === 24)    fps = 24;
+        else if (ts === 25)    fps = 25;
+        else if (ts === 30)    fps = 30;
+        else if (ts === 48)    fps = 48;
+        else if (ts === 50)    fps = 50;
+        else if (ts === 60)    fps = 60;
+        else if (ts === 24000) fps = 24000 / 1001;  // 23.976
+        else if (ts === 30000) fps = 30000 / 1001;  // 29.97
+        else if (ts === 60000) fps = 60000 / 1001;  // 59.94
+        else return null;                            // unknown / non-video timescale (incl. 48000/47.952)
 
-        return { fps: ts, totalFrames: dur };  // dur == frames when timescale == fps
+        // frames = (dur / timescale) * fps. For integer rates this is dur;
+        // for NTSC it divides out the 1001 units-per-frame.
+        var totalFrames = Math.round(dur * fps / ts);
+        return { fps: fps, totalFrames: totalFrames };
     }
 
     /**
@@ -649,14 +672,36 @@
         //   - FLAT:    active layer is raw plate in _comp @ startTime=0 →
         //              offset = 0; src-frame = compTime * srcFps.
         //   - PRECOMP: active layer is inside stack, outer stack layer in
-        //              _comp is at startTime=fullStart=_comp.workAreaStart →
-        //              offset = workAreaStart; src-frame = (compTime - offset) * srcFps.
+        //              _comp is at startTime=fullStart →
+        //              offset = outer layer's startTime; src-frame = (compTime - offset) * srcFps.
+        // NOTE: fullStart != _comp.workAreaStart. The _comp work area is the
+        // editorial CUT (workAreaStart = cutStart = fullStart + handleSec),
+        // verified on real shots via deep-inspect (e.g. workArea start 9.24
+        // vs outer layer startTime 8.24, a 1.0s head handle). Using the outer
+        // layer's startTime makes the source-frame mapping land on the true
+        // cut frames (matching the FLAT layout); using workAreaStart shifted
+        // the export window earlier by handleSec and dropped cut frames.
         var containingC = null;
         try { containingC = layer.containingComp; } catch (eCC) {}
         var isNested = !!(containingC && containingC !== comp);
         var offsetSec = 0;
         if (isNested) {
-            try { offsetSec = comp.workAreaStart || 0; } catch (eWA) {}
+            // Find the outer layer in _comp whose source is the precomp we
+            // recursed into, and use ITS startTime (= fullStart). Fall back
+            // to workAreaStart only if it can't be located.
+            var foundOuter = false;
+            for (var oL = 1; oL <= comp.numLayers; oL++) {
+                try {
+                    if (comp.layer(oL).source === containingC) {
+                        offsetSec = comp.layer(oL).startTime;
+                        foundOuter = true;
+                        break;
+                    }
+                } catch (eOL) {}
+            }
+            if (!foundOuter) {
+                try { offsetSec = comp.workAreaStart || 0; } catch (eWA) {}
+            }
         }
 
         // ── activeComp mode: short-circuit timing from the layer itself ──
