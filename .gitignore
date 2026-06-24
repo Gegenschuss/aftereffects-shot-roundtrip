@@ -12,3 +12,6 @@ Adobe After Effects Auto-Save/
 # Claude Code local state
 .claude/
 CLAUDE.md
+
+# IDE
+.nova/
